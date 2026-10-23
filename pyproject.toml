@@ -1,0 +1,10 @@
+[project]
+name = "browser-based-photogrammetry-and-3d-model-viewer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pycolmap>=4.2.1",
+    "pycolmap-cuda12>=4.2.1",
+]
