@@ -17,11 +17,11 @@
 ## How to run
 
 ```bash
-uv run reconstruction.py --images <path_to_images> --output <path_to_output>
+uv run reconstruct.py --images <path_to_images> --output <path_to_output>
 ```
 
 Example (assuming you have downloaded the images and placed them in `./images/eagle/images`):
 
 ```bash
-uv run reconstruction.py --images ./images/eagle/images --output ./images/eagle/output
+uv run reconstruct.py --images ./images/eagle/images --output ./images/eagle/output
 ```
