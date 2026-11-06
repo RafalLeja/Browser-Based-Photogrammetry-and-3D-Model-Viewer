@@ -15,7 +15,9 @@ def write(path: Path, content: bytes) -> None:
 
 def expected_dir_hash(file_contents: list[bytes]) -> str:
     """Recompute the expected dir_hash independently of the implementation."""
-    file_hashes = sorted(hashlib.sha256(content).hexdigest() for content in file_contents)
+    file_hashes = sorted(
+        hashlib.sha256(content).hexdigest() for content in file_contents
+    )
     return hashlib.sha256("".join(file_hashes).encode()).hexdigest()
 
 
@@ -35,7 +37,9 @@ def test_multiple_files_match_reference(tmp_path: Path) -> None:
     write(tmp_path / "a.txt", b"alpha")
     write(tmp_path / "b.txt", b"beta")
     write(tmp_path / "c.bin", b"\x00\x01\x02\x03")
-    assert dir_hash(tmp_path) == expected_dir_hash([b"alpha", b"beta", b"\x00\x01\x02\x03"])
+    assert dir_hash(tmp_path) == expected_dir_hash(
+        [b"alpha", b"beta", b"\x00\x01\x02\x03"]
+    )
 
 
 def test_empty_file_matches_reference(tmp_path: Path) -> None:
@@ -95,12 +99,6 @@ def test_deleting_a_file_changes_hash(tmp_path: Path) -> None:
     assert dir_hash(tmp_path) != hash_before
 
 
-def test_hash_is_deterministic(tmp_path: Path) -> None:
-    write(tmp_path / "a.txt", b"deterministic")
-    write(tmp_path / "sub" / "b.txt", b"content")
-    assert dir_hash(tmp_path) == dir_hash(tmp_path)
-
-
 def test_large_file_is_hashed_correctly(tmp_path: Path) -> None:
     # Larger than the 1 MiB chunk size used in the implementation
     large_content = b"x" * (1024 * 1024 + 12345)
@@ -134,7 +132,9 @@ def isolated_storage_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     return storage_dir
 
 
-def test_output_dir_is_inside_storage_dir(tmp_path: Path, isolated_storage_dir: Path) -> None:
+def test_output_dir_is_inside_storage_dir(
+    tmp_path: Path, isolated_storage_dir: Path
+) -> None:
     write(tmp_path / "photos" / "img.jpg", b"image bytes")
 
     result = get_output_directory(tmp_path / "photos")
@@ -142,7 +142,9 @@ def test_output_dir_is_inside_storage_dir(tmp_path: Path, isolated_storage_dir: 
     assert result.parent == isolated_storage_dir
 
 
-def test_output_dir_name_is_16_char_hash_prefix(tmp_path: Path, isolated_storage_dir: Path) -> None:
+def test_output_dir_name_is_16_char_hash_prefix(
+    tmp_path: Path, isolated_storage_dir: Path
+) -> None:
     photos = tmp_path / "photos"
     write(photos / "img.jpg", b"image bytes")
 
@@ -159,7 +161,9 @@ def test_output_dir_is_created(tmp_path: Path, isolated_storage_dir: Path) -> No
     assert result.is_dir()
 
 
-def test_same_photos_yield_same_output_dir(tmp_path: Path, isolated_storage_dir: Path) -> None:
+def test_same_photos_yield_same_output_dir(
+    tmp_path: Path, isolated_storage_dir: Path
+) -> None:
     d1 = tmp_path / "one"
     d2 = tmp_path / "two"
     write(d1 / "img.jpg", b"identical photos")
@@ -168,18 +172,12 @@ def test_same_photos_yield_same_output_dir(tmp_path: Path, isolated_storage_dir:
     assert get_output_directory(d1) == get_output_directory(d2)
 
 
-def test_different_photos_yield_different_output_dirs(tmp_path: Path, isolated_storage_dir: Path) -> None:
+def test_different_photos_yield_different_output_dirs(
+    tmp_path: Path, isolated_storage_dir: Path
+) -> None:
     d1 = tmp_path / "one"
     d2 = tmp_path / "two"
     write(d1 / "img.jpg", b"photo set one")
     write(d2 / "img.jpg", b"photo set two")
 
     assert get_output_directory(d1) != get_output_directory(d2)
-
-
-def test_output_dir_is_idempotent(tmp_path: Path, isolated_storage_dir: Path) -> None:
-    write(tmp_path / "photos" / "img.jpg", b"image bytes")
-    first = get_output_directory(tmp_path / "photos")
-    second = get_output_directory(tmp_path / "photos")
-    assert first == second
-    assert first.is_dir()
