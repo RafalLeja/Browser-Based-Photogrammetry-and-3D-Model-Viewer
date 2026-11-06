@@ -1,0 +1,48 @@
+target-version = "py314"
+line-length = 100
+fix = true
+preview = true
+
+extend-exclude = ["output", "build", "dist"]
+
+[lint]
+select = [
+  "E",     # pycodestyle errors
+  "W",     # pycodestyle warnings
+  "F",     # pyflakes
+  "I",     # isort — import sorting/organizing
+  "UP",    # pyupgrade — modernize to your Python version
+  "B",     # bugbear — likely bugs
+  "SIM",   # simplify
+  "C4",    # comprehensions
+  "RUF",   # ruff-specific rules
+  "PT",    # pytest style
+  "ASYNC", # async correctness
+]
+ignore = [
+  "line-too-long", # let the formatter own line length
+]
+
+[lint.isort]
+# Enforce a blank line after each import section
+force-sort-within-sections = false
+# Two blank lines after the last import before code
+lines-after-imports = 2
+# Put "from x import y" on one line if it fits
+force-single-line = false
+split-on-trailing-comma = true
+
+# Treat workspace packages as first-party so they sort LAST
+# (after third-party) in the import sections.
+known-first-party = ["gui", "photogrammetry_lib"]
+
+[lint.per-file-ignores]
+"tests/**" = [
+  "assert", # allow asserts in tests
+]
+
+[format]
+# Use double quotes and trailing commas (Black-compatible)
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
