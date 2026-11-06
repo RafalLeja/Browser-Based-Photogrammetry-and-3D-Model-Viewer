@@ -1,27 +1,9 @@
-## Dependencies
+# Browser based photogrammetry tool and 3D model viewer
 
-1. Colmap
+## GUI
 
-   On Debian:
+The GUI is located in `./gui` directory.
 
-   ```bash
-   sudo apt install colmap
-   ```
+## Lib
 
-2. OpenMVS
-   [https://github.com/cdcseacave/openMVS/releases]
-
-3. Images
-   [https://support.pix4d.com/hc/en-us/articles/360000235126]
-
-## How to run
-
-```bash
-uv run reconstruct.py --images <path_to_images> --output <path_to_output>
-```
-
-Example (assuming you have downloaded the images and placed them in `./images/eagle/images`):
-
-```bash
-uv run reconstruct.py --images ./images/eagle/images --output ./images/eagle/output
-```
+The photogrammetry library is located in `./photogrammetry-lib` directory.
