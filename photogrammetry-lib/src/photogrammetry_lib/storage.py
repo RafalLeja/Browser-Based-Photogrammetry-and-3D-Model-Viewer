@@ -1,6 +1,7 @@
 import hashlib
 from pathlib import Path
 
+
 STORAGE_DIR = Path.home() / ".bbpa3mv" / "storage"
 
 
