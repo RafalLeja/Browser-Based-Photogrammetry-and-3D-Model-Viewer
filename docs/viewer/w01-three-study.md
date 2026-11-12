@@ -212,7 +212,23 @@ Brightness below is the mean luminance (0–255) of the central part of the view
 2. **Materials are unlit.** `KHR_materials_unlit` becomes `MeshBasicMaterial`, so environment and key light have no effect (brightness stayed at 216.0). Exposure and tone mapping still change it (233.2 and 232.6), because they apply to the final image.
 3. **The scale is arbitrary.** The size is 9.881 × 5.367 × 5.450 units, which is not real metres yet. The ruler needs real scale (W05).
 
-**Status:** to be reported to Rafał, with a request to re-export with embedded textures.
+**Status:** the export requirements for Rafał, including embedded textures, are in [integration.md](integration.md).
+
+**Performance baseline:** a quick check of the requirement targets, not the full W07 evaluation. Same setup as above, viewport 1920 × 895, on a PC with a GTX 1050 Ti and a UHD Graphics 630. The browser did not report which GPU it used.
+
+| Model | Backend | FPS | Load, ms | First frame, ms |
+|---|---|---|---|---|
+| DamagedHelmet, 3.6 MB, 15,452 triangles | WebGPU | 60 | 162–185 | 191–200 |
+| DamagedHelmet, 3.6 MB, 15,452 triangles | WebGL 2 | 60 | 180–352 | 333–367 |
+| Test sphere, 13.4 MB, 500,000 triangles | WebGPU | 60 | 34–84 | 47–105 |
+| Test sphere, 13.4 MB, 500,000 triangles | WebGL 2 | 60 | 76–183 | 84–190 |
+
+Limits of this check:
+
+- 60 FPS is the display's cap, so the real limit is unknown.
+- The sphere has no textures and was built in memory for this test, so it is not in the repository.
+- Times are from three runs after the file was already available, so they exclude download time. They are the time from starting the load to the `loaded` event and to the next frames.
+- Integrated-GPU laptops were not tested.
 
 ## 9. Open questions
 
