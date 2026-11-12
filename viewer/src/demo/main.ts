@@ -11,6 +11,8 @@ const STUDIO_HDR = `${BASE}hdr/studio_small_09_1k.hdr`;
 const MODELS: Record<string, string> = {
   DamagedHelmet: `${BASE}models/DamagedHelmet.glb`,
   'eagle (raw scan)': `${BASE}models/eagle.glb`,
+  // On purpose: shows what a failed download looks like.
+  'missing file (error test)': `${BASE}models/does-not-exist.glb`,
 };
 
 const ENVIRONMENTS: Record<string, EnvironmentOptions> = {
@@ -23,19 +25,21 @@ const TONE_MAPPINGS: ToneMappingName[] = ['neutral', 'aces', 'agx', 'none'];
 
 function requireElement(selector: string): HTMLElement {
   const element = document.querySelector<HTMLElement>(selector);
-  if (!element) throw new Error(`Missing element ${selector} in index.html`);
+  if (!element) throw new Error(`Missing element ${selector} in the page`);
   return element;
 }
 
 const statusPanel = requireElement('#status');
-const status = { backend: '…', load: '–', triangles: '–', size: '–', error: '' };
+const status = { backend: '…', model: '–', load: '–', triangles: '–', size: '–', error: '' };
 
 function renderStatus(): void {
   const rows = [
     `Backend: ${status.backend}`,
+    `Model: ${status.model}`,
     `Load: ${status.load}`,
     `Triangles: ${status.triangles}`,
     `Size: ${status.size}`,
+    'Tip: drop a .glb file on the page',
   ].map((text) => {
     const row = document.createElement('div');
     row.textContent = text;
@@ -45,7 +49,7 @@ function renderStatus(): void {
   if (status.error) {
     const row = document.createElement('div');
     row.className = 'error';
-    row.textContent = `Error: ${status.error}`;
+    row.textContent = status.error;
     rows.push(row);
   }
   statusPanel.replaceChildren(...rows);
@@ -78,9 +82,13 @@ async function main(): Promise<void> {
     status.load = '100%';
     status.triangles = triangles.toLocaleString('en-GB');
     status.size = `${size.map((value) => value.toFixed(3)).join(' × ')} units`;
+    status.error = ''; // A model that loads replaces any earlier error.
     renderStatus();
   });
-  viewer.on('error', ({ message }) => showError(message));
+  viewer.on('error', ({ code, httpStatus, message }) => {
+    const what = httpStatus === undefined ? code : `${code}, HTTP ${httpStatus}`;
+    showError(`Error (${what}): ${message}`);
+  });
 
   const params = {
     model: 'DamagedHelmet',
@@ -90,6 +98,9 @@ async function main(): Promise<void> {
     toneMapping: 'neutral' as ToneMappingName,
     exposure: 1,
     keyLight: 1,
+    groundShadow: 0.5,
+    autoRotate: false,
+    resetView: () => viewer.resetView(),
     testMeasure: () => viewer.enableMeasure(true),
     testPin: () =>
       viewer.addPin({ id: 'test', position: [0, 0, 0], normal: [0, 1, 0], title: 'Test' }),
@@ -100,6 +111,8 @@ async function main(): Promise<void> {
     .add(params, 'model', Object.keys(MODELS))
     .name('Model')
     .onChange((name: string) => {
+      status.model = name;
+      renderStatus();
       viewer.load(MODELS[name]).catch(ignoreRejection);
     });
   gui
@@ -132,12 +145,42 @@ async function main(): Promise<void> {
     .add(params, 'keyLight', 0, 5, 0.01)
     .name('Key light intensity')
     .onChange((intensity: number) => viewer.setLighting({ keyLight: { intensity } }));
+  gui
+    .add(params, 'groundShadow', 0, 1, 0.01)
+    .name('Ground shadow')
+    .onChange((opacity: number) => viewer.setLighting({ groundShadow: { opacity } }));
+  gui
+    .add(params, 'autoRotate')
+    .name('Auto-rotate')
+    .onChange((on: boolean) => viewer.setAutoRotate(on));
+  gui.add(params, 'resetView').name('Reset view');
   gui.add(params, 'testMeasure').name('Test measure (stub)');
   gui.add(params, 'testPin').name('Test pin (stub)');
 
-  await viewer.load(MODELS[params.model]);
+  // Without preventDefault on both events the browser opens the dropped file itself and
+  // leaves the page, also when the drop misses the canvas.
+  window.addEventListener('dragover', (event) => event.preventDefault());
+  window.addEventListener('drop', (event) => {
+    event.preventDefault();
+    const file = event.dataTransfer?.files[0];
+    if (!file) return;
+    status.model = file.name;
+    renderStatus();
+    // The object URL points at the file in memory. A .glb carries its textures inside, so
+    // nothing needs the URL once the load has settled.
+    const url = URL.createObjectURL(file);
+    viewer
+      .load(url)
+      .catch(ignoreRejection)
+      .finally(() => URL.revokeObjectURL(url));
+  });
+
+  // A failure here is shown by the "error" listener; a cancelled load is not a failure.
+  status.model = params.model;
+  renderStatus();
+  await viewer.load(MODELS[params.model]).catch(ignoreRejection);
 }
 
 main().catch((err: unknown) => {
-  showError(err instanceof Error ? err.message : String(err));
+  showError(`Error: ${err instanceof Error ? err.message : String(err)}`);
 });

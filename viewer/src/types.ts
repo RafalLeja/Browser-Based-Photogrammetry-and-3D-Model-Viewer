@@ -28,6 +28,13 @@ export interface ModelInfo {
   center: Vec3;
 }
 
+export interface LoadOptions {
+  /** Extra HTTP request headers, for example `{ Authorization: 'Bearer <token>' }`. */
+  headers?: Record<string, string>;
+  /** Send cookies with a cross-origin request. Default false. */
+  withCredentials?: boolean;
+}
+
 export interface KeyLightOptions {
   intensity: number;
   /** CSS colour string, e.g. '#ffffff'. */
@@ -36,10 +43,17 @@ export interface KeyLightOptions {
   direction: Vec3;
 }
 
+export interface GroundShadowOptions {
+  /** 0 hides the shadow, 1 is the darkest. Default 0.5. */
+  opacity: number;
+}
+
 export interface LightingUpdate {
   exposure?: number;
   toneMapping?: ToneMappingName;
   keyLight?: Partial<KeyLightOptions>;
+  /** Soft shadow on the ground under the model. */
+  groundShadow?: Partial<GroundShadowOptions>;
 }
 
 export interface EnvironmentOptions {
@@ -48,7 +62,7 @@ export interface EnvironmentOptions {
   preset?: EnvironmentPreset;
   /** Multiplier for image-based lighting strength. Default 1. */
   intensity?: number;
-  /** Show the HDR panorama behind the model. Default false. */
+  /** Show the HDR panorama behind the model. Default false: the canvas is transparent. */
   showBackground?: boolean;
 }
 
@@ -63,10 +77,19 @@ export interface Pin {
   text?: string;
 }
 
+/**
+ * What failed:
+ * - 'load': a model could not be downloaded or read.
+ * - 'environment': an HDR environment could not be downloaded or read.
+ * - 'device-lost': the browser took the GPU away, and the viewer has stopped drawing.
+ */
+export type ViewerErrorCode = 'load' | 'environment' | 'device-lost';
+
 export interface ViewerEvents {
   progress: { url: string; loaded: number; total: number | null };
   loaded: ModelInfo;
-  error: { message: string; cause?: unknown };
+  /** `httpStatus` is set when a download failed with an HTTP status, e.g. 404. */
+  error: { code: ViewerErrorCode; message: string; httpStatus?: number; cause?: unknown };
   measure: { start: Vec3; end: Vec3; distance: number };
   'pin-click': { id: string };
 }
@@ -76,8 +99,16 @@ export type Unsubscribe = () => void;
 export interface Viewer {
   /** Which GPU backend is actually in use. */
   readonly backend: RendererBackend;
-  /** Load a .glb/.gltf, replacing the current model, and frame the camera on it. */
-  load(url: string): Promise<ModelInfo>;
+  /**
+   * Load a .glb/.gltf, replacing the current model, and frame the camera on it.
+   * A newer load() or dispose() cancels this one: the promise then rejects with an Error
+   * whose `name` is 'AbortError', and no `error` event is emitted.
+   */
+  load(url: string, options?: LoadOptions): Promise<ModelInfo>;
+  /** Move the camera back to the default view of the current model. */
+  resetView(): void;
+  /** Slowly turn the camera around the model. It pauses while the user drags. */
+  setAutoRotate(on: boolean): void;
   /** Partial update: only the given fields change. */
   setLighting(update: LightingUpdate): void;
   /** Change image-based lighting / background. Resolves when the new environment is active. */
