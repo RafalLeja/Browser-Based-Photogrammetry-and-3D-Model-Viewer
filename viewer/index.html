@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D model viewer demo</title>
+  <title>3D Model Viewer</title>
   <style>
     html,
     body,
@@ -13,29 +13,11 @@
       height: 100%;
       margin: 0;
     }
-
-
-    #status {
-      position: fixed;
-      top: 12px;
-      left: 12px;
-      max-width: 45ch;
-      padding: 8px 12px;
-      border-radius: 6px;
-      background: rgb(0 0 0 / 65%);
-      overflow-wrap: anywhere;
-      pointer-events: none;
-    }
-
-    #status .error {
-      color: #ff8080;
-    }
   </style>
 </head>
 
 <body>
   <div id="root"></div>
-  <div id="status" role="status"></div>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 
