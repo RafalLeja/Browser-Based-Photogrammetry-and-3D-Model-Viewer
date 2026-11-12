@@ -1,15 +1,21 @@
 {
   "name": "viewer",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "check": "npm run typecheck && npm test && npm run build"
   },
   "devDependencies": {
+    "@types/node": "24.19.2",
     "@types/three": "0.187.0",
     "lil-gui": "0.21.0",
     "typescript": "~7.0.2",
