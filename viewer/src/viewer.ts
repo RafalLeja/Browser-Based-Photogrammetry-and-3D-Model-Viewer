@@ -1,5 +1,5 @@
-// The only file that imports three. Everything else talks to the public API in types.ts,
-// so the frontend never depends on Three.js types.
+// One of three files that import three (with model.ts and shadow.ts). The frontend talks
+// only to the public API in types.ts, so it never depends on Three.js types.
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -7,10 +7,15 @@ import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 import { Emitter } from './events';
+import { fitDistance } from './framing';
+import { abortError, httpStatusOf, isAbortError, progressPayload } from './loading';
+import { disposeModel, measureModel, prepareModel } from './model';
+import { ContactShadow } from './shadow';
 import type {
   EnvironmentOptions,
   EnvironmentPreset,
   LightingUpdate,
+  LoadOptions,
   ModelInfo,
   Pin,
   RendererBackend,
@@ -18,17 +23,16 @@ import type {
   Unsubscribe,
   Vec3,
   Viewer,
+  ViewerErrorCode,
   ViewerEvents,
   ViewerOptions,
 } from './types';
 
-// The background also passes through tone mapping, and Neutral crushes very dark values:
-// '#1e1e1e' would display as near-black. This value displays as about #1e1e1e at exposure 1,
-// and it moves with the exposure and tone-mapping settings like the rest of the image.
-const BACKGROUND_COLOR = '#3c3c3c';
-
 /** Distance used to place the key light until a model has been framed. */
 const DEFAULT_LIGHT_DISTANCE = 5;
+
+/** From the model's centre towards the camera: front-right and a little above. */
+const DEFAULT_VIEW_DIRECTION = new THREE.Vector3(1, 0.6, 1).normalize();
 
 const TONE_MAPPING: Record<ToneMappingName, THREE.ToneMapping> = {
   neutral: THREE.NeutralToneMapping,
@@ -41,6 +45,8 @@ export async function createViewer(
   container: HTMLElement,
   options?: ViewerOptions,
 ): Promise<Viewer> {
+  // The canvas has an alpha channel and clears to transparent by default, so the page behind
+  // it shows wherever nothing is drawn. The page, not the viewer, chooses the backdrop.
   const renderer = new THREE.WebGPURenderer({
     antialias: true,
     forceWebGL: options?.forceWebGL ?? false,
@@ -72,14 +78,21 @@ class ViewerImpl implements Viewer {
   private readonly controls: OrbitControls;
   private readonly pmrem: THREE.PMREMGenerator;
   private readonly resizeObserver: ResizeObserver;
-  private readonly backgroundColor = new THREE.Color(BACKGROUND_COLOR);
+  private readonly timer = new THREE.Timer();
   private readonly keyLight = new THREE.DirectionalLight('#ffffff', 1);
   private readonly keyLightDirection = new THREE.Vector3(1, 2, 1.5).normalize();
   /** Holds the current glTF scene, so replacing a model never touches lights or camera. */
   private readonly modelRoot = new THREE.Group();
+  private readonly shadow = new ContactShadow();
   private readonly pins = new Map<string, Pin>();
+  /** Texture sharpness at flat viewing angles: 8 looks sharp and stays cheap on any GPU. */
+  private readonly anisotropy: number;
 
   private lightDistance = DEFAULT_LIGHT_DISTANCE;
+  /** Bounding sphere of the current model; null until the first load(). */
+  private modelSphere: THREE.Sphere | null = null;
+  /** Set by the user's first drag or wheel turn; from then on a resize keeps their view. */
+  private userMovedCamera = false;
   /** PMREM result we own: it lights the model through scene.environment. */
   private envTarget: THREE.CubeRenderTarget | null = null;
   /** Original panorama we own: PMREM output is too blurry to use as a background. */
@@ -87,9 +100,9 @@ class ViewerImpl implements Viewer {
   private showBackground = false;
   private measureEnabled = false;
   private disposed = false;
-  // Counters that let the newest request win when downloads overlap,
-  // for example when a user switches models before the previous one has finished.
-  private loadRequest = 0;
+  /** Belongs to the newest load(). Aborting it cancels that download. */
+  private loadManager: THREE.LoadingManager | null = null;
+  // Lets the newest environment win when HDR downloads overlap.
   private envRequest = 0;
 
   constructor(container: HTMLElement, renderer: THREE.WebGPURenderer) {
@@ -99,10 +112,19 @@ class ViewerImpl implements Viewer {
     // while renderer.backend is typed as the shared base class.
     const isWebGPU = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
     this.backend = isWebGPU ? 'webgpu' : 'webgl2';
+    this.anisotropy = Math.min(8, renderer.getMaxAnisotropy());
 
-    // Capped because phone and laptop screens can reach 3x or more, which multiplies
-    // the pixels shaded per frame with little visible gain.
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // three's own handler logs the loss and stops drawing. This adds an event for the page.
+    const reportToThree = renderer.onDeviceLost;
+    renderer.onDeviceLost = (info) => {
+      reportToThree.call(renderer, info); // three's handler uses `this`.
+      this.emitter.emit('error', {
+        code: 'device-lost',
+        message: `The graphics device was lost (${info.api}): ${info.message}`,
+        cause: info,
+      });
+    };
+
     // Neutral keeps base colours closest to the real object, which matters for scans.
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 1;
@@ -116,8 +138,7 @@ class ViewerImpl implements Viewer {
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
     this.camera.position.set(3, 2, 3); // Replaced by auto-framing on the first load().
 
-    this.scene.background = this.backgroundColor;
-    this.scene.add(this.modelRoot);
+    this.scene.add(this.modelRoot, this.shadow.mesh);
 
     // A light's direction runs from its position to its target, so the target must be
     // in the scene as well for its transform to update.
@@ -129,6 +150,14 @@ class ViewerImpl implements Viewer {
     this.controls.dampingFactor = 0.08;
     // Stops the camera flipping over the bottom pole.
     this.controls.maxPolarAngle = Math.PI * 0.95;
+    // The wheel zooms towards the point under the pointer, so a detail is one gesture away.
+    this.controls.zoomToCursor = true;
+    // A grab hand over the canvas shows that the model can be dragged.
+    this.controls.cursorStyle = 'grab';
+    // 'start' fires on the first pointer or wheel input of a gesture.
+    this.controls.addEventListener('start', () => {
+      this.userMovedCamera = true;
+    });
 
     // Created after init() and reused, because it holds its own GPU resources.
     this.pmrem = new THREE.PMREMGenerator(renderer);
@@ -137,72 +166,125 @@ class ViewerImpl implements Viewer {
       const width = container.clientWidth;
       const height = container.clientHeight;
       if (width === 0 || height === 0) return; // For example a hidden tab panel.
+      // Read on every resize, because browser zoom changes the pixel ratio. Capped because
+      // phone and laptop screens can reach 3x or more, which multiplies the pixels shaded per
+      // frame with little visible gain.
+      // shortcut: a move to a monitor with another pixel ratio but the same CSS size does not trigger a resize; add a matchMedia('(resolution: …dppx)') listener if users report a blurry image.
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       // false: leave the canvas CSS at 100%, so the container alone controls its size.
       renderer.setSize(width, height, false);
       this.camera.aspect = width / height;
       this.camera.updateProjectionMatrix();
+      // A layout that settles after loading must not leave the model cropped, so the camera
+      // refits along its current direction. Once the user has moved it, their view stays.
+      if (!this.userMovedCamera) {
+        this.placeCamera(this.camera.position.clone().sub(this.controls.target).normalize());
+      }
     };
     resize();
     this.resizeObserver = new ResizeObserver(resize);
     this.resizeObserver.observe(container);
 
     // Damping needs controls.update() every frame. Render-on-demand comes in W07.
-    void renderer.setAnimationLoop(() => {
-      this.controls.update();
+    // The timer measures the time between frames, so auto-rotate turns at the same speed on a
+    // 60 Hz and a 120 Hz display. connect() makes it ignore time spent in a background tab.
+    this.timer.connect(document);
+    void renderer.setAnimationLoop((time) => {
+      this.timer.update(time);
+      this.controls.update(this.timer.getDelta());
       renderer.render(this.scene, this.camera);
     });
   }
 
-  async load(url: string): Promise<ModelInfo> {
+  async load(url: string, options?: LoadOptions): Promise<ModelInfo> {
     if (this.disposed) throw new Error('[viewer] load() called after dispose()');
 
-    const request = ++this.loadRequest;
+    // The newest load() wins. Aborting the manager cancels the download that is still running.
+    this.loadManager?.abort();
+    const manager = new THREE.LoadingManager();
+    this.loadManager = manager;
+
+    const loader = new GLTFLoader(manager);
+    if (options?.headers) loader.setRequestHeader(options.headers);
+    if (options?.withCredentials) loader.setWithCredentials(true);
+
     let gltfScene: THREE.Group;
     try {
-      const gltf = await new GLTFLoader().loadAsync(url, (event) => {
-        this.emitter.emit('progress', {
-          url,
-          loaded: event.loaded,
-          total: event.lengthComputable ? event.total : null,
-        });
+      const gltf = await loader.loadAsync(url, (event) => {
+        this.emitter.emit(
+          'progress',
+          progressPayload(url, event.loaded, event.total, event.lengthComputable),
+        );
       });
       gltfScene = gltf.scene;
     } catch (cause) {
-      throw this.fail(`Failed to load model "${url}"`, cause);
+      // Replaced by a newer load() or by dispose(). Not an error for the page: no "error" event.
+      if (this.loadManager !== manager) throw abortError(url);
+      // Still the newest load, yet cancelled: three shares one download between requests for
+      // the same URL, and this one joined a download that an older load() cancelled. three has
+      // already forgotten that download, so starting again opens a fresh one, which only a
+      // newer load() or dispose() can cancel.
+      if (isAbortError(cause)) return this.load(url, options);
+      throw this.fail('load', `Failed to load model "${url}"`, cause);
     }
 
-    if (request !== this.loadRequest) {
-      // A newer load() or dispose() happened during the download. Not an error for the
-      // page, so no "error" event, but this promise must not claim the model is shown.
-      disposeObject(gltfScene);
-      throw new Error(`[viewer] load("${url}") was superseded`);
+    if (this.loadManager !== manager) {
+      // The download finished, but a newer load() or dispose() happened while it was being read.
+      disposeModel(gltfScene);
+      throw abortError(url);
     }
+
+    // Measured before the swap, so a model that cannot be shown is rejected like a failed
+    // download and the current model stays on screen.
+    let measured: ReturnType<typeof measureModel>;
+    try {
+      measured = measureModel(gltfScene);
+    } catch (cause) {
+      disposeModel(gltfScene);
+      throw this.fail('load', `Failed to load model "${url}"`, cause);
+    }
+    const { box, triangles } = measured;
+
+    prepareModel(gltfScene, this.anisotropy);
 
     // The old model is removed only now, so a failed load keeps the current model on screen.
-    disposeObject(this.modelRoot);
+    disposeModel(this.modelRoot);
     this.modelRoot.clear();
 
     // The model is not recentred or rescaled: pins are stored in model space and the
     // ruler needs true scale. The camera moves to the model instead.
+    // modelRoot sits at the origin unrotated, so the box measured above is still correct.
     this.modelRoot.add(gltfScene);
 
-    const box = new THREE.Box3().setFromObject(this.modelRoot);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     // An empty model reports radius -1. Falling back to 1 keeps the camera maths valid.
     const radius = sphere.radius > 0 ? sphere.radius : 1;
 
-    this.frameCamera(center, radius);
+    // Baked once here: the model never moves, so the shadow never needs redrawing per frame.
+    this.shadow.update(this.renderer, this.scene, this.modelRoot, box);
+
+    this.modelSphere = new THREE.Sphere(center, radius);
+    this.placeCamera(DEFAULT_VIEW_DIRECTION);
 
     const info: ModelInfo = {
       url,
-      triangles: countTriangles(this.modelRoot),
+      triangles,
       size: toVec3(size),
       center: toVec3(center),
     };
     this.emitter.emit('loaded', info);
     return info;
+  }
+
+  resetView(): void {
+    this.placeCamera(DEFAULT_VIEW_DIRECTION);
+  }
+
+  setAutoRotate(on: boolean): void {
+    // OrbitControls turns 30 seconds per turn at its default speed and pauses while dragged.
+    this.controls.autoRotate = on;
   }
 
   setLighting(update: LightingUpdate): void {
@@ -219,6 +301,10 @@ class ViewerImpl implements Viewer {
     if (key?.direction !== undefined) {
       this.keyLightDirection.set(...key.direction).normalize();
       this.updateKeyLightPosition();
+    }
+
+    if (update.groundShadow?.opacity !== undefined) {
+      this.shadow.setOpacity(update.groundShadow.opacity);
     }
   }
 
@@ -246,13 +332,12 @@ class ViewerImpl implements Viewer {
         this.applyPreset(options.preset);
       }
     } catch (cause) {
-      throw this.fail(`Failed to set environment "${options.hdrUrl ?? options.preset}"`, cause);
+      throw this.fail('environment', `Failed to set environment "${options.hdrUrl ?? options.preset}"`, cause);
     }
 
     if (options.intensity !== undefined) this.scene.environmentIntensity = options.intensity;
     if (options.showBackground !== undefined) this.showBackground = options.showBackground;
-    this.scene.background =
-      this.showBackground && this.equirect ? this.equirect : this.backgroundColor;
+    this.scene.background = this.showBackground && this.equirect ? this.equirect : null;
   }
 
   enableMeasure(on: boolean): void {
@@ -283,16 +368,19 @@ class ViewerImpl implements Viewer {
     if (this.disposed) return;
     this.disposed = true;
 
-    // Makes any download still in flight discard its result when it finishes.
-    this.loadRequest++;
+    // Cancels a model download still in flight, and makes an HDR download discard its result.
+    this.loadManager?.abort();
+    this.loadManager = null;
     this.envRequest++;
 
     void this.renderer.setAnimationLoop(null);
+    this.timer.dispose();
     this.resizeObserver.disconnect();
     this.controls.dispose();
 
-    disposeObject(this.modelRoot);
+    disposeModel(this.modelRoot);
     this.modelRoot.clear();
+    this.shadow.dispose();
     this.replaceEnvironment(null, null);
     this.pmrem.dispose();
 
@@ -301,24 +389,28 @@ class ViewerImpl implements Viewer {
     this.emitter.clear();
   }
 
-  /** Moves the camera so the whole bounding sphere fits on screen. */
-  private frameCamera(center: THREE.Vector3, radius: number): void {
-    // Right triangle: camera to centre is the hypotenuse, the radius is the side opposite
-    // half the field of view, so sin(fov / 2) = radius / distance. The factor 1.2 adds margin.
-    // shortcut: uses the vertical FOV only, so a portrait container can crop the model.
-    // Include the horizontal FOV if the frontend embeds the viewer in a tall, narrow panel.
-    const fov = THREE.MathUtils.degToRad(this.camera.fov);
-    const distance = (radius / Math.sin(fov / 2)) * 1.2;
+  /**
+   * Moves the camera so the whole model fits on screen, looking at it from `direction`
+   * (a unit vector from the model's centre towards the camera; it is not modified).
+   */
+  private placeCamera(direction: THREE.Vector3): void {
+    if (!this.modelSphere) return; // Nothing to frame before the first load().
+    const { center, radius } = this.modelSphere;
 
-    const viewDirection = new THREE.Vector3(1, 0.6, 1).normalize();
-    this.camera.position.copy(center).addScaledVector(viewDirection, distance);
+    const distance = fitDistance(radius, THREE.MathUtils.degToRad(this.camera.fov), this.camera.aspect);
+    this.camera.position.copy(center).addScaledVector(direction, distance);
 
     // Scaling near and far with the model keeps depth precision usable for any model size.
-    this.camera.near = distance / 100;
+    // near comes from the radius, not the distance: a narrow container moves the camera back,
+    // and a near plane taken from that distance could cut into the model when zooming in.
+    this.camera.near = radius / 100;
     this.camera.far = distance * 100;
     this.camera.updateProjectionMatrix();
 
     this.controls.target.copy(center);
+    // The target may move at most one radius from the centre, so panning cannot lose the model.
+    this.controls.cursor.copy(center);
+    this.controls.maxTargetRadius = radius;
     this.controls.minDistance = radius * 0.2;
     this.controls.maxDistance = distance * 5;
     this.controls.update();
@@ -326,6 +418,9 @@ class ViewerImpl implements Viewer {
     this.keyLight.target.position.copy(center);
     this.lightDistance = distance;
     this.updateKeyLightPosition();
+
+    // load() and resetView() hand the framing back to the viewer until the user moves again.
+    this.userMovedCamera = false;
   }
 
   private updateKeyLightPosition(): void {
@@ -361,7 +456,7 @@ class ViewerImpl implements Viewer {
   ): void {
     this.scene.environment = target?.texture ?? null;
     if (this.scene.background === this.equirect) {
-      this.scene.background = this.backgroundColor; // Never leave a disposed texture in use.
+      this.scene.background = null; // Never leave a disposed texture in use.
     }
     this.envTarget?.dispose();
     this.equirect?.dispose();
@@ -370,43 +465,12 @@ class ViewerImpl implements Viewer {
   }
 
   /** Reports a failure to listeners and returns the Error the caller should reject with. */
-  private fail(message: string, cause: unknown): Error {
+  private fail(code: ViewerErrorCode, message: string, cause: unknown): Error {
     const reason = cause instanceof Error ? `: ${cause.message}` : '';
     const fullMessage = `${message}${reason}`;
-    this.emitter.emit('error', { message: fullMessage, cause });
+    this.emitter.emit('error', { code, message: fullMessage, httpStatus: httpStatusOf(cause), cause });
     return new Error(fullMessage, { cause });
   }
-}
-
-function isMesh(object: THREE.Object3D): object is THREE.Mesh {
-  return (object as THREE.Mesh).isMesh === true;
-}
-
-/** Frees GPU memory. JavaScript's garbage collector cannot release buffers and textures. */
-function disposeObject(root: THREE.Object3D): void {
-  root.traverse((object) => {
-    if (!isMesh(object)) return;
-    object.geometry.dispose();
-
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    for (const material of materials) {
-      // Textures sit on many properties (map, normalMap, ...), so check them all.
-      for (const value of Object.values(material) as unknown[]) {
-        if (value instanceof THREE.Texture) value.dispose();
-      }
-      material.dispose();
-    }
-  });
-}
-
-function countTriangles(root: THREE.Object3D): number {
-  let triangles = 0;
-  root.traverse((object) => {
-    if (!isMesh(object)) return;
-    const { index, attributes } = object.geometry;
-    triangles += (index ? index.count : attributes.position.count) / 3;
-  });
-  return triangles;
 }
 
 function toVec3(vector: THREE.Vector3): Vec3 {

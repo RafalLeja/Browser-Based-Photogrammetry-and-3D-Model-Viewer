@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D model viewer demo</title>
+    <style>
+      html,
+      body,
+      #stage {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        overflow: hidden;
+        /* The canvas is transparent, so this is what shows behind the model. */
+        background: radial-gradient(ellipse at 50% 40%, #3a4654 0%, #1b222b 55%, #0e1116 100%);
+        color: #eee;
+        font: 13px/1.5 system-ui, sans-serif;
+      }
+      #status {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        max-width: 45ch;
+        padding: 8px 12px;
+        border-radius: 6px;
+        background: rgb(0 0 0 / 65%);
+        overflow-wrap: anywhere;
+        pointer-events: none;
+      }
+      #status .error {
+        color: #ff8080;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <div id="status" role="status"></div>
+    <script type="module" src="/src/demo/main.ts"></script>
+  </body>
+</html>

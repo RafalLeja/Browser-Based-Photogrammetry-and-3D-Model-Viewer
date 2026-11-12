@@ -1,0 +1,32 @@
+name: Viewer
+
+on:
+  pull_request:
+    paths:
+      - 'viewer/**'
+      - '.github/workflows/viewer.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'viewer/**'
+      - '.github/workflows/viewer.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Test and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: viewer
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+      - run: npm ci
+      - run: npm run check
