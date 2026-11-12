@@ -2,6 +2,8 @@
 
 A framework-free 3D model viewer built with Three.js. It shows the GLB models produced by our photogrammetry pipeline, with PBR lighting, HDR environments and a soft contact shadow. It will gain a measuring ruler (W04) and annotation pins (W05). The web frontend embeds it through a small API, so the frontend never depends on Three.js types.
 
+New to the project? Start with the [visual walkthrough](../docs/viewer/walkthrough.md): screenshots, short recordings and a guided tour of the code.
+
 ## Requirements
 
 - Node.js `>=22.18.0`. The unit tests run TypeScript files directly, which needs Node 22.18 or newer.
