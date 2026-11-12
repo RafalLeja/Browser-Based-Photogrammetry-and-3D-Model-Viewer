@@ -1,6 +1,8 @@
+import { Link } from 'react-router-dom';
+
 export function Gallery() {
   const items = [
-    { title: "Ancestral Mask", date: "Early 20th century", tags: ["CEREMONIAL OBJECT"] },
+    { title: "Damaged Helmet", date: "12.11.2026", tags: ["NEW"] },
     { title: "Fossil Oyster", date: "Jurassic period", tags: ["NATURAL HISTORY", "PROCESSING"] },
     { title: "Terracotta Figures", date: "3rd century BCE", tags: ["SCULPTURE"] },
     { title: "Mourning Figure", date: "Late 19th century", tags: ["SCULPTURE"] },
@@ -39,19 +41,21 @@ export function Gallery() {
 
       <section className="items-grid">
         {items.map((item, index) => (
-          <div key={index} className="card">
-            <div className="card-image-placeholder">
-              <div className="tags">
-                {item.tags.map(tag => (
-                  <span key={tag} className="tag">{tag}</span>
-                ))}
+          <Link to="/viewer" key={index} style={{ textDecoration: 'none', color: 'inherit' }}>
+            <div className="card">
+              <div className="card-image-placeholder">
+                <div className="tags">
+                  {item.tags.map(tag => (
+                    <span key={tag} className="tag">{tag}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="card-info">
+                <h3 className="card-title">{item.title}</h3>
+                <p className="card-date">{item.date}</p>
               </div>
             </div>
-            <div className="card-info">
-              <h3 className="card-title">{item.title}</h3>
-              <p className="card-date">{item.date}</p>
-            </div>
-          </div>
+          </Link>
         ))}
       </section>
     </>
