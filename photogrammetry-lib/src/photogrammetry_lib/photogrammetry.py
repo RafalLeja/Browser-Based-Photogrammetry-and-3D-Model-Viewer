@@ -52,9 +52,8 @@ class PhotogrammetryModel:
 
     def get_status(self):
         try:
-            if (self.output_dir / "status.txt").exists():
-                with open(self.output_dir / "status.txt") as f:
-                    self.step = PhotogrammetryStep[f.read().strip()]
+            with open(self.output_dir / "status.txt") as f:
+                self.step = PhotogrammetryStep[f.read().strip()]
         except Exception as e:
             print(f"Warning: Failed to read status file: {e}")
             self.step = PhotogrammetryStep.INIT
