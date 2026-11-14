@@ -10,12 +10,17 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@types/three": "0.187.0",
     "lil-gui": "0.21.0",
     "typescript": "~7.0.2",
     "vite": "^8.3.6"
   },
   "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.5",
     "three": "0.187.0"
   }
 }

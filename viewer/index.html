@@ -1,42 +1,24 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>3D model viewer demo</title>
-    <style>
-      html,
-      body,
-      #stage {
-        height: 100%;
-        margin: 0;
-      }
-      body {
-        overflow: hidden;
-        background: #1e1e1e;
-        color: #eee;
-        font: 13px/1.5 system-ui, sans-serif;
-      }
-      #status {
-        position: fixed;
-        top: 12px;
-        left: 12px;
-        max-width: 45ch;
-        padding: 8px 12px;
-        border-radius: 6px;
-        background: rgb(0 0 0 / 65%);
-        overflow-wrap: anywhere;
-        pointer-events: none;
-      }
-      #status .error {
-        color: #ff8080;
-      }
-    </style>
-  </head>
-  <body>
-    <div id="stage"></div>
-    <div id="status" role="status"></div>
-    <script type="module" src="/src/demo/main.ts"></script>
-  </body>
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D Model Viewer</title>
+  <style>
+    html,
+    body,
+    #root {
+      height: 100%;
+      margin: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
 </html>
