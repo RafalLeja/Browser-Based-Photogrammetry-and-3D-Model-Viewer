@@ -45,10 +45,12 @@ class PhotogrammetryModel:
                 raise RuntimeError(f"Sparse reconstruction directory does not exist: {sparse_dir}")
             self.reconstruction = pycolmap.Reconstruction(sparse_dir)
 
-        if pycolmap.has_cuda:
+        if pycolmap.get_num_cuda_devices() > 0:
             self.device = "cuda"
         else:
-            self.device = "cpu"
+            raise RuntimeError(
+                "No CUDA devices available for pycolmap. Please ensure that you have a compatible GPU and the necessary drivers installed."
+            )
 
     def get_status(self):
         try:
