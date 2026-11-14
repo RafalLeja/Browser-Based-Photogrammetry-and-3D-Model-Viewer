@@ -124,7 +124,7 @@ def test_file_instead_of_dir_raises(tmp_path: Path) -> None:
 # --- get_output_directory ---
 
 
-@pytest.fixture()
+@pytest.fixture
 def isolated_storage_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point STORAGE_DIR at a temporary directory so tests don't touch $HOME."""
     storage_dir = tmp_path / "storage"
