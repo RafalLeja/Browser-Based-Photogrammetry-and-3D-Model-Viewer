@@ -19,13 +19,6 @@ for 3D reconstruction and model visualization.
 - Python
 - FastAPI
 - PostgreSQL
-- Redis
-- Docker
-
-## Contributing
-
-Please read our [Contributing Guidelines](docs/CONTRIBUTING.md)
-before submitting changes
 
 ## GUI
 
