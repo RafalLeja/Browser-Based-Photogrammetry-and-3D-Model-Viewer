@@ -51,7 +51,7 @@ async def get_model_from_photos(
         PhotogrammetryStep.SPARSE_RECONSTRUCTION: "Generating 3D model from photos",
         PhotogrammetryStep.EXPORT_SPARSE_MODEL: "Exporting sparse model",
         PhotogrammetryStep.UNDISTORTION: "Undistorting images",
-        PhotogrammetryStep.PATCH_MATCHING: "Path matching",
+        PhotogrammetryStep.PATCH_MATCHING: "Patch matching",
         PhotogrammetryStep.STEREO_FUSION: "Stereo fusion",
         PhotogrammetryStep.POISSON_MESHING: "Poisson meshing",
         PhotogrammetryStep.EXPORT_DENSE_MODEL: "Exporting dense model",
