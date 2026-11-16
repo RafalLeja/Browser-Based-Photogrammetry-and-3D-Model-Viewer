@@ -36,6 +36,7 @@ class PhotogrammetryModel:
         self.output_file = output_file
         self.sparse_dir = self.output_dir / "sparse"
         self.dense_dir = self.output_dir / "dense"
+        self.meshed_path: Path = self.dense_dir / "meshed-poisson.ply"
 
         self.steps = {
             PhotogrammetryStep.LOADING: self.load_images,
@@ -51,19 +52,13 @@ class PhotogrammetryModel:
         }
         self.get_status()
 
-        if self.step.value < PhotogrammetryStep.EXPORT_SPARSE_MODEL.value:
+        if (
+            self.step.value < PhotogrammetryStep.EXPORT_SPARSE_MODEL.value
+            or not self.sparse_dir.exists()
+        ):
             self.reconstruction: pycolmap.Reconstruction | None = None
             self.sparse_dir.mkdir(exist_ok=True)
-
-        if self.step.value < PhotogrammetryStep.EXPORT_DENSE_MODEL.value:
-            self.meshed_path: Path = self.dense_dir / "meshed-poisson.ply"
-            self.dense_dir.mkdir(exist_ok=True)
-
         else:
-            if not self.sparse_dir.exists():
-                raise RuntimeError(
-                    f"Sparse reconstruction directory does not exist: {self.sparse_dir}"
-                )
             self.reconstruction = pycolmap.Reconstruction(self.sparse_dir)
 
         if pycolmap.get_num_cuda_devices() > 0:
