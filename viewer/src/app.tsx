@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import { Gallery } from './pages/gallery';
 // import { Login } from './pages/login';
-// import { Upload } from './pages/upload';
+import { Upload } from './pages/upload';
 import { ViewerPage } from './pages/viewerpage';
 import './app.css';
 
@@ -31,8 +31,8 @@ function App() {
         <main>
           <Routes>
             <Route path="/" element={<Gallery />} />
-            {/* <Route path="/login" element={<Login />} />
-            <Route path="/upload" element={<Upload />} /> */}
+            {/* <Route path="/login" element={<Login />} /> */}
+            <Route path="/upload" element={<Upload />} />
             <Route path="/viewer" element={<ViewerPage />} />
           </Routes>
         </main>
