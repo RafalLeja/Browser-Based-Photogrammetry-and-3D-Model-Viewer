@@ -2,8 +2,6 @@
 
 A framework-free 3D model viewer built with Three.js. It shows the GLB models produced by our photogrammetry pipeline, with PBR lighting, HDR environments and a soft contact shadow. It will gain a measuring ruler (W04) and annotation pins (W05). The web frontend embeds it through a small API, so the frontend never depends on Three.js types.
 
-New to the project? Start with the [visual walkthrough](../docs/viewer/walkthrough.md): screenshots, short recordings and a guided tour of the code.
-
 ## Requirements
 
 - Node.js `>=22.18.0`. The unit tests run TypeScript files directly, which needs Node 22.18 or newer.
@@ -17,7 +15,7 @@ npm run dev         # Dev server. The viewer test page is http://localhost:5173/
 npm test            # Unit tests, with Node's built-in test runner
 npm run typecheck   # Type-check the source and the tests
 npm run build       # Type-check, then build index.html and demo.html into dist/
-npm run check       # Type-check, tests and build. CI runs this.
+npm run check       # Type-check, tests and build. Run it before committing.
 ```
 
 On the test page:
@@ -26,7 +24,7 @@ On the test page:
 - Drop a `.glb` file anywhere on the page to load it. This is the quickest way to test a pipeline export.
 - The model "missing file (error test)" fails on purpose, so you can see how an error looks.
 
-`index.html` is the frontend's entry page. Until the frontend is merged, it shows the same test page without the backdrop.
+`index.html` is the frontend's entry page (React). Its `/viewer` route, in `src/pages/viewerpage.tsx`, embeds the viewer.
 
 The demo's "eagle (raw scan)" model is not committed. To use it, run this inside `viewer/`:
 
@@ -36,7 +34,7 @@ Copy-Item ../images/eagle/output/mvs/scene_textured.glb public/models/eagle.glb
 
 ## API reference
 
-Types are in [`src/types.ts`](src/types.ts). Everything is exported from [`src/index.ts`](src/index.ts). Changes per version are in [`CHANGELOG.md`](CHANGELOG.md).
+Types are in [`src/types.ts`](src/types.ts). Everything is exported from [`src/index.ts`](src/index.ts).
 
 ### Functions and methods
 
@@ -121,8 +119,6 @@ offError();
 viewer.dispose();
 ```
 
-[`docs/viewer/integration.md`](../docs/viewer/integration.md) has a React component that survives StrictMode, the mapping from the wireframes to the API, and what the backend and the pipeline need to deliver.
-
 ## Units and coordinates
 
 Positions and distances are in metres (glTF convention: 1 unit = 1 m), and +Y is up. Models are not recentred or rescaled. `ModelInfo.size` and `center` are true metres only once the pipeline outputs real scale (W05). The contact shadow lies under the model's lowest point, so a model that is not +Y up gets its shadow on the wrong plane.
@@ -131,12 +127,11 @@ Positions and distances are in metres (glTF convention: 1 unit = 1 m), and +Y is
 
 ```text
 viewer/
-├─ index.html          Frontend entry page (until the frontend is merged: the test page)
+├─ index.html          Frontend entry page (React)
 ├─ demo.html           Viewer test page, with a backdrop behind the transparent canvas
 ├─ vite.config.ts      Builds both pages; the dev server answers 404 for missing model and HDR files
 ├─ tsconfig.json       TypeScript settings for src/
 ├─ tsconfig.test.json  The same settings plus Node's types, for test/
-├─ CHANGELOG.md        Changes per version
 ├─ README.md           This file
 ├─ public/
 │  ├─ models/          DamagedHelmet.glb, eagle.glb (local only, not committed)
@@ -150,7 +145,9 @@ viewer/
 │  ├─ shadow.ts        Ground contact shadow
 │  ├─ loading.ts       Progress payload and error helpers
 │  ├─ framing.ts       Camera distance maths
-│  └─ demo/main.ts     Test page script, uses only the public API and lil-gui
+│  ├─ demo/main.ts     Test page script, uses only the public API and lil-gui
+│  ├─ main.tsx, app.tsx, app.css   Frontend shell and routes
+│  └─ pages/           Frontend pages: gallery, viewer page
 └─ test/               Unit tests for events.ts, model.ts, loading.ts and framing.ts
 ```
 
@@ -163,7 +160,6 @@ Only `viewer.ts`, `model.ts` and `shadow.ts` import three. `loading.ts` and `fra
 
 ## Open decisions to agree with Hanna
 
-- **Import method:** proposed in the [integration guide](../docs/viewer/integration.md): the frontend and the viewer share this folder, and the frontend imports from `src/index.ts`.
-- **Who draws what:** proposed in the [integration guide](../docs/viewer/integration.md): the viewer draws the model and the 3D overlays, the frontend draws the panels and the backdrop.
+- **Who draws what:** proposed: the viewer draws the model and the 3D overlays, the frontend draws the panels and the backdrop, as `src/pages/viewerpage.tsx` does now.
 - **Event payloads:** are the fields in `ViewerEvents` enough for the frontend?
 - **Display units:** millimetres or centimetres for measurements shown to users.
