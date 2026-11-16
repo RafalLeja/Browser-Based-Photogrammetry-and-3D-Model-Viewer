@@ -1,4 +1,3 @@
-import { resolve } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 
 /**
@@ -27,13 +26,4 @@ function missingAssetsAre404(): Plugin {
 
 export default defineConfig({
   plugins: [missingAssetsAre404()],
-  build: {
-    // Two pages ship from one build: the frontend (index.html) and the viewer test page.
-    rolldownOptions: {
-      input: {
-        main: resolve(import.meta.dirname, 'index.html'),
-        demo: resolve(import.meta.dirname, 'demo.html'),
-      },
-    },
-  },
 });

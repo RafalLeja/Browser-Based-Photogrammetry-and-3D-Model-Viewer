@@ -11,22 +11,22 @@ A framework-free 3D model viewer built with Three.js. It shows the GLB models pr
 
 ```powershell
 npm ci
-npm run dev         # Dev server. The viewer test page is http://localhost:5173/demo.html
+npm run dev         # Dev server. The viewer page is http://localhost:5173/viewer
 npm test            # Unit tests, with Node's built-in test runner
 npm run typecheck   # Type-check the source and the tests
-npm run build       # Type-check, then build index.html and demo.html into dist/
+npm run build       # Type-check, then build into dist/
 npm run check       # Type-check, tests and build. Run it before committing.
 ```
 
-On the test page:
+`index.html` is the frontend's entry page (React). Its `/viewer` route, in `src/pages/viewerpage.tsx`, embeds the viewer.
+
+On the viewer page:
 
 - Add `?webgl` to the URL to force the WebGL 2 fallback.
 - Drop a `.glb` file anywhere on the page to load it. This is the quickest way to test a pipeline export.
 - The model "missing file (error test)" fails on purpose, so you can see how an error looks.
 
-`index.html` is the frontend's entry page (React). Its `/viewer` route, in `src/pages/viewerpage.tsx`, embeds the viewer.
-
-The demo's "eagle (raw scan)" model is not committed. To use it, run this inside `viewer/`:
+The "eagle (raw scan)" model is not committed. To use it, run this inside `viewer/`:
 
 ```powershell
 Copy-Item ../images/eagle/output/mvs/scene_textured.glb public/models/eagle.glb
@@ -128,8 +128,7 @@ Positions and distances are in metres (glTF convention: 1 unit = 1 m), and +Y is
 ```text
 viewer/
 ├─ index.html          Frontend entry page (React)
-├─ demo.html           Viewer test page, with a backdrop behind the transparent canvas
-├─ vite.config.ts      Builds both pages; the dev server answers 404 for missing model and HDR files
+├─ vite.config.ts      The dev server answers 404 for missing model and HDR files
 ├─ tsconfig.json       TypeScript settings for src/
 ├─ tsconfig.test.json  The same settings plus Node's types, for test/
 ├─ README.md           This file
@@ -145,9 +144,8 @@ viewer/
 │  ├─ shadow.ts        Ground contact shadow
 │  ├─ loading.ts       Progress payload and error helpers
 │  ├─ framing.ts       Camera distance maths
-│  ├─ demo/main.ts     Test page script, uses only the public API and lil-gui
 │  ├─ main.tsx, app.tsx, app.css   Frontend shell and routes
-│  └─ pages/           Frontend pages: gallery, viewer page
+│  └─ pages/           Frontend pages: gallery, viewer page with lil-gui controls
 └─ test/               Unit tests for events.ts, model.ts, loading.ts and framing.ts
 ```
 
