@@ -42,22 +42,6 @@ async def get_model_from_photos(
     """
     model = PhotogrammetryModel(photo_dir, output_file, restart)
 
-    # TODO:
-    # this dict shouldn't exist
-    descriptions = {
-        PhotogrammetryStep.LOADING: "Loading photos",
-        PhotogrammetryStep.FEATURE_EXTRACTION: "Extracting features",
-        PhotogrammetryStep.FEATURE_MATCHING: "Matching features",
-        PhotogrammetryStep.SPARSE_RECONSTRUCTION: "Generating 3D model from photos",
-        PhotogrammetryStep.EXPORT_SPARSE_MODEL: "Exporting sparse model",
-        PhotogrammetryStep.UNDISTORTION: "Undistorting images",
-        PhotogrammetryStep.PATCH_MATCHING: "Patch matching",
-        PhotogrammetryStep.STEREO_FUSION: "Stereo fusion",
-        PhotogrammetryStep.POISSON_MESHING: "Poisson meshing",
-        PhotogrammetryStep.EXPORT_DENSE_MODEL: "Exporting dense model",
-        PhotogrammetryStep.FINISHED: "3D model generated successfully",
-    }
-
     total_steps = max(model.steps, key=lambda step: step.value).value + 1
 
     try:
@@ -65,7 +49,7 @@ async def get_model_from_photos(
             yield PhotogrammetryProgress(
                 status="in_progress",
                 step=f"{step.value}/{total_steps}",
-                step_description=descriptions[step],
+                step_description=PhotogrammetryStep(step).name.replace("_", " ").title(),
             )
 
     except Exception as error:
