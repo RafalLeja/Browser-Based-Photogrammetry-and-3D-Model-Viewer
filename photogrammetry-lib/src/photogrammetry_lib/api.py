@@ -24,7 +24,7 @@ class PhotogrammetryProgress:
 
 
 async def get_model_from_photos(
-    photo_dir: Path, output_file: Path
+    photo_dir: Path, output_file: Path, restart: bool = False
 ) -> AsyncGenerator[PhotogrammetryProgress]:
     """
     Generate a 3D model from photos in the specified directory.
@@ -40,23 +40,7 @@ async def get_model_from_photos(
     Yields:
         PhotogrammetryProgress: An object containing the progress of the photogrammetry process.
     """
-    model = PhotogrammetryModel(photo_dir, output_file)
-
-    # TODO:
-    # this dict shouldn't exist
-    descriptions = {
-        PhotogrammetryStep.LOADING: "Loading photos",
-        PhotogrammetryStep.FEATURE_EXTRACTION: "Extracting features",
-        PhotogrammetryStep.FEATURE_MATCHING: "Matching features",
-        PhotogrammetryStep.SPARSE_RECONSTRUCTION: "Generating 3D model from photos",
-        PhotogrammetryStep.EXPORT_SPARSE_MODEL: "Exporting sparse model",
-        PhotogrammetryStep.UNDISTORTION: "Undistorting images",
-        PhotogrammetryStep.PATCH_MATCHING: "Patch matching",
-        PhotogrammetryStep.STEREO_FUSION: "Stereo fusion",
-        PhotogrammetryStep.POISSON_MESHING: "Poisson meshing",
-        PhotogrammetryStep.EXPORT_DENSE_MODEL: "Exporting dense model",
-        PhotogrammetryStep.FINISHED: "3D model generated successfully",
-    }
+    model = PhotogrammetryModel(photo_dir, output_file, restart)
 
     total_steps = max(model.steps, key=lambda step: step.value).value + 1
 
@@ -65,7 +49,7 @@ async def get_model_from_photos(
             yield PhotogrammetryProgress(
                 status="in_progress",
                 step=f"{step.value}/{total_steps}",
-                step_description=descriptions[step],
+                step_description=PhotogrammetryStep(step).name.replace("_", " ").title(),
             )
 
     except Exception as error:

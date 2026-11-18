@@ -23,7 +23,9 @@ class PhotogrammetryStep(Enum):
 
 
 class PhotogrammetryModel:
-    def __init__(self, image_path: Path, output_file: Path | None = None):
+    def __init__(
+        self, image_path: Path, output_file: Path | None = None, restart: bool = False
+    ) -> None:
         """
         Arguments:
             image_path (Path): The path to the directory containing the input images.
@@ -50,7 +52,10 @@ class PhotogrammetryModel:
             PhotogrammetryStep.POISSON_MESHING: self.poisson_meshing,
             PhotogrammetryStep.EXPORT_DENSE_MODEL: self.export_model,
         }
-        self.get_status()
+        if restart:
+            self.step = PhotogrammetryStep.INIT
+        else:
+            self.get_status()
 
         if (
             self.step.value < PhotogrammetryStep.EXPORT_SPARSE_MODEL.value
