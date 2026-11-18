@@ -24,7 +24,7 @@ class PhotogrammetryProgress:
 
 
 async def get_model_from_photos(
-    photo_dir: Path, output_file: Path
+    photo_dir: Path, output_file: Path, restart: bool = False
 ) -> AsyncGenerator[PhotogrammetryProgress]:
     """
     Generate a 3D model from photos in the specified directory.
@@ -40,7 +40,7 @@ async def get_model_from_photos(
     Yields:
         PhotogrammetryProgress: An object containing the progress of the photogrammetry process.
     """
-    model = PhotogrammetryModel(photo_dir, output_file)
+    model = PhotogrammetryModel(photo_dir, output_file, restart)
 
     # TODO:
     # this dict shouldn't exist

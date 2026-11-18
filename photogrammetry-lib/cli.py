@@ -10,9 +10,9 @@ def print_progress(progress: PhotogrammetryProgress) -> None:
     print(f"[{progress.status}] step {progress.step}: {progress.step_description}")
 
 
-async def run(photo_dir: Path, output_file: Path) -> PhotogrammetryProgress:
+async def run(photo_dir: Path, output_file: Path, restart: bool) -> PhotogrammetryProgress:
     last_progress: PhotogrammetryProgress | None = None
-    async for progress in get_model_from_photos(photo_dir, output_file):
+    async for progress in get_model_from_photos(photo_dir, output_file, restart):
         print_progress(progress)
         last_progress = progress
 
@@ -38,13 +38,19 @@ def main() -> None:
         required=True,
         help="Output path for the generated model (.ply file, or a directory for the sparse model)",
     )
+    arg_parser.add_argument(
+        "--restart",
+        action="store_true",
+        required=False,
+        help="Restart the pipeline from the beginning, ignoring any previous progress",
+    )
     args = arg_parser.parse_args()
 
     if not args.input.is_dir():
         arg_parser.error(f"Input directory does not exist: {args.input}")
 
     try:
-        last_progress = asyncio.run(run(args.input, args.output))
+        last_progress = asyncio.run(run(args.input, args.output, args.restart))
     except KeyboardInterrupt:
         print("Interrupted.", file=sys.stderr)
         sys.exit(130)
