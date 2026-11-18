@@ -1,34 +1,47 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from app.database.session import get_db
-from app.models import Object
-from app.schemas.object import ObjectResponse
+from pathlib import Path
 
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 router = APIRouter(
     prefix="/objects",
     tags=["Objects"]
 )
 
+# Katalog przechowujący gotowe modele 3D
+BACKEND_ROOT = Path(__file__).resolve().parents[3]
+MODELS_DIRECTORY = BACKEND_ROOT / "storage" / "models"
 
-@router.get("", response_model=list[ObjectResponse])
-def get_objects(db: Session = Depends(get_db)):
-    statement = select(Object).order_by(Object.id)
-    objects = db.scalars(statement).all()
+
+@router.get("")
+def get_objects():
+    if not MODELS_DIRECTORY.exists():
+        return []
+
+    objects = []
+
+    for model_file in MODELS_DIRECTORY.glob("*.glb"):
+        objects.append({
+            "id": model_file.stem,
+            "title": model_file.stem
+        })
 
     return objects
 
 
-@router.get("/{object_id}", response_model=ObjectResponse)
-def get_object(object_id: int, db: Session = Depends(get_db)):
-    obj = db.get(Object, object_id)
+@router.get("/{object_id}")
+def get_object(object_id: str):
+    model_path = MODELS_DIRECTORY / f"{object_id}.glb"
 
-    if obj is None:
+    if not model_path.is_file():
         raise HTTPException(
             status_code=404,
             detail="Object not found"
         )
 
-    return obj
+    return FileResponse(
+        path=model_path,
+        media_type="model/gltf-binary",
+        filename=model_path.name
+    )

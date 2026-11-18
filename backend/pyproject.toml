@@ -1,3 +1,4 @@
+
 [project]
 name = "backend"
 version = "0.1.0"
@@ -5,7 +6,16 @@ description = "Add your description here"
 readme = "README.md"
 authors = [{ email = "rafal@leja.org.pl" }]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "fastapi>=0.163.1",
+    "photogrammetry-lib",
+    "psycopg[binary]>=3.3.9",
+    "pwdlib[argon2]>=0.4.2",
+    "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.34",
+    "sqlalchemy>=2.1.8",
+    "uvicorn[standard]>=0.54.0",
+]
 
 [project.scripts]
 backend = "backend:main"
@@ -13,13 +23,6 @@ backend = "backend:main"
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
 build-backend = "uv_build"
-requires-python = ">=3.12"
-dependencies = [
-    "alembic>=1.20.1",
-    "fastapi>=0.163.1",
-    "psycopg[binary]>=3.3.9",
-    "pwdlib[argon2]>=0.4.2",
-    "python-dotenv>=1.2.4",
-    "sqlalchemy>=2.1.8",
-    "uvicorn[standard]>=0.54.0",
-]
+
+[tool.uv.sources]
+photogrammetry-lib = { path = "../photogrammetry-lib", editable = true }

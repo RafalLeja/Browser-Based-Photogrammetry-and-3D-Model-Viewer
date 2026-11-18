@@ -1,15 +1,6 @@
-from datetime import datetime
-
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 class ObjectResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
+    id: str
     title: str
-    description: str | None
-    created_by: int
-    is_published: bool
-    created_at: datetime
-    updated_at: datetime

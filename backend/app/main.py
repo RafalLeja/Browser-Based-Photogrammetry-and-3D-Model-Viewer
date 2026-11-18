@@ -2,11 +2,14 @@
 import logging
 
 from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 
 from app.api.routes.health import router as health_router
 from app.core.logging_config import setup_logging
 
 from app.api.routes.objects import router as objects_router
+from app.api.routes.uploads import router as uploads_router
+from app.api.routes.jobs import router as jobs_router
 
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +24,34 @@ app = FastAPI(
     version="1.0.0",
 )
 
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+
+    schemas = openapi_schema.get("components", {}).get("schemas", {})
+
+    for schema in schemas.values():
+        properties = schema.get("properties", {})
+
+        for prop in properties.values():
+            items = prop.get("items", {})
+
+            if items.get("contentMediaType") == "application/octet-stream":
+                items.pop("contentMediaType")
+                items["format"] = "binary"
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 IMAGES_DIRECTORY = PROJECT_ROOT / "images"
 
@@ -32,6 +63,8 @@ app.mount(
 
 app.include_router(health_router)
 app.include_router(objects_router)
+app.include_router(uploads_router)
+app.include_router(jobs_router)
 
 
 @app.on_event("startup")
