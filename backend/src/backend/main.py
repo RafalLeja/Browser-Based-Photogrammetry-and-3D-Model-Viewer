@@ -49,7 +49,7 @@ async def start_pipeline(
 
     async def event_stream():
         try:
-            models_dir = STORAGE_DIR / "exported_models"
+            models_dir = STORAGE_DIR.parent / "exported_models"
             output_ply = models_dir / f"{safe_filename(object_name)}.ply"
             model = await asyncio.to_thread(PhotogrammetryModel, temp_dir, output_ply)
             yield f"data: {json.dumps({'step': PhotogrammetryStep.LOADING.name})}\n\n"
