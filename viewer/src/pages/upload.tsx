@@ -7,6 +7,12 @@ type PipelineStep =
   | 'FEATURE_EXTRACTION'
   | 'FEATURE_MATCHING'
   | 'SPARSE_RECONSTRUCTION'
+  | 'EXPORT_SPARSE_MODEL'
+  | 'UNDISTORTION'
+  | 'PATCH_MATCHING'
+  | 'STEREO_FUSION'
+  | 'POISSON_MESHING'
+  | 'EXPORT_DENSE_MODEL'
   | 'FINISHED'
   | 'ERROR';
 
@@ -24,9 +30,15 @@ interface PipelineJob {
 const STEP_CONFIG: Record<PipelineStep, { label: string; progress: number }> = {
   INIT: { label: 'Initializing', progress: 5 },
   LOADING: { label: 'Loading images', progress: 20 },
-  FEATURE_EXTRACTION: { label: 'Feature extraction', progress: 45 },
-  FEATURE_MATCHING: { label: 'Feature matching', progress: 70 },
-  SPARSE_RECONSTRUCTION: { label: 'Sparse reconstruction', progress: 90 },
+  FEATURE_EXTRACTION: { label: 'Feature extraction', progress: 30 },
+  FEATURE_MATCHING: { label: 'Feature matching', progress: 35 },
+  SPARSE_RECONSTRUCTION: { label: 'Sparse reconstruction', progress: 45 },
+  EXPORT_SPARSE_MODEL: { label: 'Exporting sparse model', progress: 55 },
+  UNDISTORTION: { label: 'Undistorting images', progress: 65 },
+  PATCH_MATCHING: { label: 'Patch matching', progress: 75 },
+  STEREO_FUSION: { label: 'Stereo fusion', progress: 85 },
+  POISSON_MESHING: { label: 'Poisson meshing', progress: 90 },
+  EXPORT_DENSE_MODEL: { label: 'Exporting dense model', progress: 95 },
   FINISHED: { label: 'Done', progress: 100 },
   ERROR: { label: 'Failed', progress: 0 },
 };
