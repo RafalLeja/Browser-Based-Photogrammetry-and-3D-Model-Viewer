@@ -33,6 +33,10 @@ def safe_filename(name: str) -> str:
     return cleaned or "model"
 
 
+def format_step_label(step_name: str) -> str:
+    return step_name.replace("_", " ").capitalize()
+
+
 @app.post("/api/pipeline/start")
 async def start_pipeline(
     object_name: Annotated[str, Form()],
@@ -51,23 +55,43 @@ async def start_pipeline(
         try:
             models_dir = STORAGE_DIR.parent / "exported_models"
             output_ply = models_dir / f"{safe_filename(object_name)}.ply"
+
+            yield f"data: {json.dumps({'step': 'INIT', 'label': 'Initializing model', 'progress': 5})}\n\n"
             model = await asyncio.to_thread(PhotogrammetryModel, temp_dir, output_ply)
-            yield f"data: {json.dumps({'step': PhotogrammetryStep.LOADING.name})}\n\n"
-            for step, step_func in model.steps.items():
+
+            yield f"data: {json.dumps({'step': PhotogrammetryStep.LOADING.name, 'label': format_step_label(PhotogrammetryStep.LOADING.name), 'progress': 10})}\n\n"
+
+            all_steps = list(model.steps.items())
+            total_steps = len(all_steps)
+
+            for idx, (step, step_func) in enumerate(all_steps):
                 if model.step.value >= step.value:
                     continue
-                yield f"data: {json.dumps({'step': step.name})}\n\n"
+
+                progress = 15 + int((idx / max(total_steps, 1)) * 75)
+                payload = {
+                    "step": step.name,
+                    "label": format_step_label(step.name),
+                    "progress": progress,
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+
                 await asyncio.to_thread(step_func)
 
                 model.step = step
                 await asyncio.to_thread(model.save_status)
 
+            yield f"data: {json.dumps({'step': 'EXPORTING', 'label': 'Exporting model', 'progress': 95})}\n\n"
             await asyncio.to_thread(model.export_model)
-
-            yield f"data: {json.dumps({'step': PhotogrammetryStep.FINISHED.name})}\n\n"
+            yield f"data: {json.dumps({'step': PhotogrammetryStep.FINISHED.name, 'label': 'Done', 'progress': 100})}\n\n"
 
         except Exception as exc:
-            error_payload = {"step": "ERROR", "error": str(exc)}
+            error_payload = {
+                "step": "ERROR",
+                "label": "Failed",
+                "progress": 0,
+                "error": str(exc),
+            }
             yield f"data: {json.dumps(error_payload)}\n\n"
 
         finally:
