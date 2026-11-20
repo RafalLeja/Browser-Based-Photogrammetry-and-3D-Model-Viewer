@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncGenerator
 from enum import Enum
 from pathlib import Path
@@ -75,16 +76,24 @@ class PhotogrammetryModel:
 
     def get_status(self):
         try:
-            with open(self.output_dir / "status.txt") as f:
-                self.step = PhotogrammetryStep[f.read().strip()]
+            with open(self.output_dir / "status.json") as f:
+                status_json = json.load(f)
+                self.step = PhotogrammetryStep[status_json.get("step", "INIT")]
         except Exception as e:
             print(f"Warning: Failed to read status file: {e}")
             self.step = PhotogrammetryStep.INIT
             self.save_status()
 
     def save_status(self):
-        with open(self.output_dir / "status.txt", "w") as f:
-            f.write(self.step.name)
+        try:
+            with open(self.output_dir / "status.json") as f:
+                status_json = json.load(f)
+        except Exception:
+            status_json = {}
+
+        status_json["step"] = self.step.name
+        with open(self.output_dir / "status.json", "w") as f:
+            json.dump(status_json, f, indent=4)
 
     def load_images(self):
         (self.output_dir / "images").mkdir(exist_ok=True)
