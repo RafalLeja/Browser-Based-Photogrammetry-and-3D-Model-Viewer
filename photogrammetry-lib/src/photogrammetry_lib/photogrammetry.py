@@ -1,3 +1,5 @@
+import json
+import time
 from collections.abc import AsyncGenerator
 from enum import Enum
 from pathlib import Path
@@ -39,6 +41,7 @@ class PhotogrammetryModel:
         self.sparse_dir = self.output_dir / "sparse"
         self.dense_dir = self.output_dir / "dense"
         self.meshed_path: Path = self.dense_dir / "meshed-poisson.ply"
+        self.times = {}
 
         self.steps = {
             PhotogrammetryStep.LOADING: self.load_images,
@@ -54,6 +57,7 @@ class PhotogrammetryModel:
         }
         if restart:
             self.step = PhotogrammetryStep.INIT
+            self.times = {}
         else:
             self.get_status()
 
@@ -75,16 +79,24 @@ class PhotogrammetryModel:
 
     def get_status(self):
         try:
-            with open(self.output_dir / "status.txt") as f:
-                self.step = PhotogrammetryStep[f.read().strip()]
+            with open(self.output_dir / "status.json") as f:
+                status_json = json.load(f)
+                self.times = status_json.get("times", {})
+                self.step = PhotogrammetryStep[status_json.get("step", "INIT")]
         except Exception as e:
             print(f"Warning: Failed to read status file: {e}")
             self.step = PhotogrammetryStep.INIT
+            self.times = {}
             self.save_status()
 
     def save_status(self):
-        with open(self.output_dir / "status.txt", "w") as f:
-            f.write(self.step.name)
+        status_json = {
+            "step": self.step.name,
+            "times": self.times,
+        }
+
+        with open(self.output_dir / "status.json", "w") as f:
+            json.dump(status_json, f, indent=4)
 
     def load_images(self):
         (self.output_dir / "images").mkdir(exist_ok=True)
@@ -196,8 +208,11 @@ class PhotogrammetryModel:
             if self.step.value >= step.value:
                 continue
 
+            start_time = time.perf_counter()
             self.steps[step]()
+            end_time = time.perf_counter()
             self.step = step
+            self.times[step.name] = end_time - start_time
             self.save_status()
 
             yield step
