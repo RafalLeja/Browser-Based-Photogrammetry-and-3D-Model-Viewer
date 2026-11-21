@@ -2,14 +2,15 @@
 // only to the public API in types.ts, so it never depends on Three.js types.
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 import { Emitter } from './events';
 import { fitDistance } from './framing';
-import { abortError, httpStatusOf, isAbortError, progressPayload } from './loading';
-import { disposeModel, measureModel, prepareModel } from './model';
+import { abortError, httpStatusOf, isAbortError, modelFormat, progressPayload } from './loading';
+import { disposeModel, measureModel, orientUp, plyObject, prepareModel } from './model';
 import { ContactShadow } from './shadow';
 import type {
   EnvironmentOptions,
@@ -204,19 +205,21 @@ class ViewerImpl implements Viewer {
     const manager = new THREE.LoadingManager();
     this.loadManager = manager;
 
-    const loader = new GLTFLoader(manager);
+    const format = options?.format ?? modelFormat(url);
+    const loader = format === 'ply' ? new PLYLoader(manager) : new GLTFLoader(manager);
     if (options?.headers) loader.setRequestHeader(options.headers);
     if (options?.withCredentials) loader.setWithCredentials(true);
 
-    let gltfScene: THREE.Group;
+    const onProgress = (event: ProgressEvent) => {
+      this.emitter.emit('progress', progressPayload(url, event.loaded, event.total, event.lengthComputable));
+    };
+
+    let model: THREE.Object3D;
     try {
-      const gltf = await loader.loadAsync(url, (event) => {
-        this.emitter.emit(
-          'progress',
-          progressPayload(url, event.loaded, event.total, event.lengthComputable),
-        );
-      });
-      gltfScene = gltf.scene;
+      model =
+        loader instanceof PLYLoader
+          ? plyObject(await loader.loadAsync(url, onProgress))
+          : (await loader.loadAsync(url, onProgress)).scene;
     } catch (cause) {
       // Replaced by a newer load() or by dispose(). Not an error for the page: no "error" event.
       if (this.loadManager !== manager) throw abortError(url);
@@ -230,22 +233,25 @@ class ViewerImpl implements Viewer {
 
     if (this.loadManager !== manager) {
       // The download finished, but a newer load() or dispose() happened while it was being read.
-      disposeModel(gltfScene);
+      disposeModel(model);
       throw abortError(url);
     }
+
+    // Turned before measuring, so the box, the shadow and the camera all see it upright.
+    if (options?.up) orientUp(model, options.up);
 
     // Measured before the swap, so a model that cannot be shown is rejected like a failed
     // download and the current model stays on screen.
     let measured: ReturnType<typeof measureModel>;
     try {
-      measured = measureModel(gltfScene);
+      measured = measureModel(model);
     } catch (cause) {
-      disposeModel(gltfScene);
+      disposeModel(model);
       throw this.fail('load', `Failed to load model "${url}"`, cause);
     }
     const { box, triangles } = measured;
 
-    prepareModel(gltfScene, this.anisotropy);
+    prepareModel(model, this.anisotropy);
 
     // The old model is removed only now, so a failed load keeps the current model on screen.
     disposeModel(this.modelRoot);
@@ -254,7 +260,7 @@ class ViewerImpl implements Viewer {
     // The model is not recentred or rescaled: pins are stored in model space and the
     // ruler needs true scale. The camera moves to the model instead.
     // modelRoot sits at the origin unrotated, so the box measured above is still correct.
-    this.modelRoot.add(gltfScene);
+    this.modelRoot.add(model);
 
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
