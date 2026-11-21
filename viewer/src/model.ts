@@ -1,6 +1,7 @@
 // Helpers for the objects inside a loaded model: free their memory, count their triangles,
 // and prepare them before the first render. Kept apart from viewer.ts so Node can test them.
 import * as THREE from 'three/webgpu';
+import type { Vec3 } from './types';
 
 /** Anything three draws from a geometry and a material: meshes, points and lines. */
 type Drawable = THREE.Object3D & {
@@ -87,12 +88,40 @@ export function prepareModel(root: THREE.Object3D, anisotropy: number): void {
 }
 
 /**
+ * Builds the object for a PLY from our pipeline: a mesh (the Poisson surface) or, without
+ * faces, a point cloud (the sparse export). COLMAP writes vertex colours but no normals, and a
+ * mesh without normals looks black under every light, so they are computed when missing.
+ */
+export function plyObject(geometry: THREE.BufferGeometry): THREE.Mesh | THREE.Points {
+  const vertexColors = geometry.hasAttribute('color');
+  if (!geometry.index) {
+    // 1 px points: WebGPU cannot draw bigger point primitives.
+    return new THREE.Points(geometry, new THREE.PointsMaterial({ vertexColors, sizeAttenuation: false }));
+  }
+  if (!geometry.hasAttribute('normal')) geometry.computeVertexNormals();
+  // The colours are the photographed surface, so the material adds no shine (metalness 0,
+  // roughness 1). DoubleSide: Poisson trimming leaves holes, and inner faces must not vanish.
+  const material = new THREE.MeshStandardMaterial({ vertexColors, metalness: 0, roughness: 1, side: THREE.DoubleSide });
+  return new THREE.Mesh(geometry, material);
+}
+
+/**
+ * Turns a model whose own up direction is `up` so that it stands +Y up, as the camera and the
+ * ground shadow expect. COLMAP keeps the first photo's camera frame, where +Y points down.
+ * Turning the object, not its vertices, keeps the file's coordinates for pins and the ruler.
+ */
+export function orientUp(root: THREE.Object3D, up: Vec3): void {
+  root.quaternion.setFromUnitVectors(new THREE.Vector3(...up).normalize(), new THREE.Vector3(0, 1, 0));
+}
+
+/**
  * Bounding box and triangle count, measured before the model replaces the current one.
  * Throws when a vertex position is NaN or infinite: such a model cannot be framed, and the
  * camera maths would turn every camera value into NaN.
  */
 export function measureModel(root: THREE.Object3D): { box: THREE.Box3; triangles: number } {
-  const box = new THREE.Box3().setFromObject(root);
+  // precise: from the vertices. A turned bounding box is looser, so the shadow would float.
+  const box = new THREE.Box3().setFromObject(root, true);
   // An empty box reports size and centre 0, so an empty model passes and shows nothing.
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());

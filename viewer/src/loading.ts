@@ -1,6 +1,15 @@
 // Small helpers for loading: the progress payload and the errors a page can tell apart.
 // No three import, so Node can test them.
-import type { ViewerEvents } from './types';
+import type { ModelFormat, ViewerEvents } from './types';
+
+/**
+ * The format of a model URL: 'ply' for a .ply path (our pipeline's Poisson mesh), otherwise
+ * 'gltf' (.glb, .gltf, and URLs without an extension). The query and hash do not count.
+ */
+export function modelFormat(url: string): ModelFormat {
+  const path = url.split(/[?#]/, 1)[0];
+  return /\.ply$/i.test(path) ? 'ply' : 'gltf';
+}
 
 /**
  * Builds the "progress" event. `total` is null unless it can be trusted: the server must have

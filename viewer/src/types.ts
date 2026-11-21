@@ -28,7 +28,21 @@ export interface ModelInfo {
   center: Vec3;
 }
 
+/** 'gltf' covers .glb and .gltf. 'ply' is what the photogrammetry pipeline exports today. */
+export type ModelFormat = 'gltf' | 'ply';
+
 export interface LoadOptions {
+  /**
+   * File format. Default: 'ply' when the URL path ends in .ply, otherwise 'gltf'.
+   * Needed for URLs without an extension, such as a blob: URL of a dropped file.
+   */
+  format?: ModelFormat;
+  /**
+   * The model's up direction in its own coordinates (any length). The viewer turns the model
+   * so this points up. For scans that are not +Y up yet: COLMAP output has +Y pointing down,
+   * so `[0, -1, 0]` flips it. Pins and distances stay in the file's own coordinates.
+   */
+  up?: Vec3;
   /** Extra HTTP request headers, for example `{ Authorization: 'Bearer <token>' }`. */
   headers?: Record<string, string>;
   /** Send cookies with a cross-origin request. Default false. */
