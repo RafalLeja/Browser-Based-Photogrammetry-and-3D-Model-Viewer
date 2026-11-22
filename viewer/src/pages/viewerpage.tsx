@@ -10,7 +10,7 @@ const STUDIO_HDR = `${BASE}hdr/studio_small_09_1k.hdr`;
 
 const MODELS: Record<string, string> = {
   DamagedHelmet: `${BASE}models/DamagedHelmet.glb`,
-  'eagle (raw scan)': `${BASE}models/eagle.glb`,
+  'eagle': `${BASE}models/eagle.glb`,
   // On purpose: shows what a failed download looks like.
   'missing file (error test)': `${BASE}models/does-not-exist.glb`,
 };
@@ -126,7 +126,7 @@ export function ViewerPage() {
       });
 
       const params = {
-        model: 'DamagedHelmet',
+        model: 'eagle',
         environment: 'Studio HDR',
         showBackground: false,
         intensity: 1,

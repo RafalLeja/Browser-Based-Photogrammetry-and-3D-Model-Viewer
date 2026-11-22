@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import './upload.css';
+import { Link, Routes } from 'react-router';
 
 interface PipelineJob {
   id: string;
@@ -272,6 +273,14 @@ export function Upload() {
             <button onClick={() => setFilter('ACTIVE')} disabled={filter === 'ACTIVE'}>Active</button>
             <button onClick={() => setFilter('COMPLETED')} disabled={filter === 'COMPLETED'}>Completed</button>
           </div>
+
+          {jobs.some((job) => job.step === 'FINISHED') && (
+            <nav className="navigation">
+              <Link to="/viewer" className="nav-btn">
+                Show Model
+              </Link>
+            </nav>
+          )}
         </div>
 
         <div className="jobs-list">
