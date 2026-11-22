@@ -1,47 +1,25 @@
 import React, { useState, useRef } from 'react';
 import './upload.css';
-
-type PipelineStep =
-  | 'INIT'
-  | 'LOADING'
-  | 'FEATURE_EXTRACTION'
-  | 'FEATURE_MATCHING'
-  | 'SPARSE_RECONSTRUCTION'
-  | 'EXPORT_SPARSE_MODEL'
-  | 'UNDISTORTION'
-  | 'PATCH_MATCHING'
-  | 'STEREO_FUSION'
-  | 'POISSON_MESHING'
-  | 'EXPORT_DENSE_MODEL'
-  | 'FINISHED'
-  | 'ERROR';
+import { Link, Routes } from 'react-router';
 
 interface PipelineJob {
   id: string;
   objectName: string;
   folderName: string;
   photoCount: number;
-  step: PipelineStep;
+  step: string;
+  stepLabel: string;
   progress: number;
   createdAt: string;
   errorMessage?: string;
 }
 
-const STEP_CONFIG: Record<PipelineStep, { label: string; progress: number }> = {
-  INIT: { label: 'Initializing', progress: 5 },
-  LOADING: { label: 'Loading images', progress: 20 },
-  FEATURE_EXTRACTION: { label: 'Feature extraction', progress: 30 },
-  FEATURE_MATCHING: { label: 'Feature matching', progress: 35 },
-  SPARSE_RECONSTRUCTION: { label: 'Sparse reconstruction', progress: 45 },
-  EXPORT_SPARSE_MODEL: { label: 'Exporting sparse model', progress: 55 },
-  UNDISTORTION: { label: 'Undistorting images', progress: 65 },
-  PATCH_MATCHING: { label: 'Patch matching', progress: 75 },
-  STEREO_FUSION: { label: 'Stereo fusion', progress: 85 },
-  POISSON_MESHING: { label: 'Poisson meshing', progress: 90 },
-  EXPORT_DENSE_MODEL: { label: 'Exporting dense model', progress: 95 },
-  FINISHED: { label: 'Done', progress: 100 },
-  ERROR: { label: 'Failed', progress: 0 },
-};
+interface SSEPayload {
+  step: string;
+  label?: string;
+  progress?: number;
+  error?: string;
+}
 
 export function Upload() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -90,7 +68,8 @@ export function Upload() {
       folderName,
       photoCount,
       step: 'INIT',
-      progress: STEP_CONFIG.INIT.progress,
+      stepLabel: 'Starting...',
+      progress: 0,
       createdAt: 'just now',
     };
   };
@@ -104,19 +83,16 @@ export function Upload() {
     return formData;
   };
 
-  const parseSSELine = (
-    line: string
-  ): { step: PipelineStep; error?: string } | null => {
+  const parseSSELine = (line: string): SSEPayload | null => {
     if (!line.startsWith('data: ')) return null;
 
     const rawData = line.replace('data: ', '').trim();
     if (!rawData) return null;
 
     try {
-      return JSON.parse(rawData) as { step: PipelineStep; error?: string };
+      return JSON.parse(rawData) as SSEPayload;
     } catch {
-      const stepName = rawData as PipelineStep;
-      return STEP_CONFIG[stepName] ? { step: stepName } : null;
+      return { step: rawData, label: rawData };
     }
   };
 
@@ -124,22 +100,24 @@ export function Upload() {
   const streamPipelineStatus = async (
     body: ReadableStream<Uint8Array>,
     jobId: string,
-    onStatusUpdate: (jobId: string, step: PipelineStep, error?: string) => void
+    onStatusUpdate: (jobId: string, payload: SSEPayload) => void
   ) => {
     const reader = body.getReader();
     const decoder = new TextDecoder('utf-8');
+    let buffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
 
       for (const line of lines) {
-        const parsed = parseSSELine(line);
+        const parsed = parseSSELine(line.trim());
         if (parsed) {
-          onStatusUpdate(jobId, parsed.step, parsed.error);
+          onStatusUpdate(jobId, parsed);
         }
       }
     }
@@ -179,32 +157,26 @@ export function Upload() {
       await streamPipelineStatus(response.body, newJob.id, updateJobStatus);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Pipeline connection failed';
-      updateJobStatus(newJob.id, 'ERROR', message);
+      updateJobStatus(newJob.id, { step: 'ERROR', label: 'Failed', progress: 0, error: message });
     } finally {
       setIsUploading(false);
     }
   };
 
-  const updateJobStatus = (
-    jobId: string,
-    step: PipelineStep,
-    errorMessage?: string
-  ) => {
-    setJobs((previousJobs) => {
-      return previousJobs.map((job) => {
-        if (job.id !== jobId) {
-          return job;
-        }
+  const updateJobStatus = (jobId: string, payload: SSEPayload) => {
+    setJobs((previousJobs) =>
+      previousJobs.map((job) => {
+        if (job.id !== jobId) return job;
 
         return {
           ...job,
-          step: step,
-          progress:
-            STEP_CONFIG[step]?.progress ?? job.progress,
-          errorMessage: errorMessage,
+          step: payload.step,
+          stepLabel: payload.label ?? payload.step,
+          progress: payload.progress ?? job.progress,
+          errorMessage: payload.error,
         };
-      });
-    });
+      })
+    );
   };
 
   const filteredJobs = jobs.filter((job) => {
@@ -301,6 +273,14 @@ export function Upload() {
             <button onClick={() => setFilter('ACTIVE')} disabled={filter === 'ACTIVE'}>Active</button>
             <button onClick={() => setFilter('COMPLETED')} disabled={filter === 'COMPLETED'}>Completed</button>
           </div>
+
+          {jobs.some((job) => job.step === 'FINISHED') && (
+            <nav className="navigation">
+              <Link to="/viewer" className="nav-btn">
+                Show Model
+              </Link>
+            </nav>
+          )}
         </div>
 
         <div className="jobs-list">
@@ -322,7 +302,7 @@ export function Upload() {
               <div className="job-progress-wrapper">
                 <div className="job-status-row">
                   <span>
-                    ● <strong>{STEP_CONFIG[job.step].label}</strong> ({job.step})
+                    ● <strong>{job.stepLabel}</strong> ({job.step})
                   </span>
                   <span>{job.progress}%</span>
                 </div>
