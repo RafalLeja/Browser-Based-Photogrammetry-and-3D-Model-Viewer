@@ -10,6 +10,7 @@ export type RendererBackend = 'webgpu' | 'webgl2';
 
 export type ToneMappingName = 'neutral' | 'aces' | 'agx' | 'none';
 
+/** 'studio' (soft boxes), 'outdoor' (sky and sun) and 'room' are generated, so they need no download. */
 export type EnvironmentPreset = 'room' | 'studio' | 'outdoor' | 'none';
 
 export interface ViewerOptions {
@@ -17,11 +18,62 @@ export interface ViewerOptions {
   forceWebGL?: boolean;
   /** Environment applied right after creation. Default: { preset: 'room' }. */
   environment?: EnvironmentOptions;
+  /**
+   * Folder (URL, ending in '/') with the Draco and Basis decoders, copied there by
+   * `npm run decoders`. Fetched only when a model uses those compressions. Default '/decoders/'.
+   */
+  decoderPath?: string;
+  /** Accessible name of the 3D view for screen readers. Default '3D model viewer'. */
+  label?: string;
+}
+
+/**
+ * What a click on the model does:
+ * - 'orbit': nothing, dragging turns the camera (the default),
+ * - 'measure': two clicks measure a distance,
+ * - 'annotate': a click reports the surface point as a 'pin-place' event.
+ */
+export type Tool = 'orbit' | 'measure' | 'annotate';
+
+export interface Measurement {
+  id: string;
+  /** End points on the surface, in model space (metres when the model is true to scale). */
+  start: Vec3;
+  end: Vec3;
+  /** Straight-line distance between start and end, in model units. */
+  distance: number;
+}
+
+/** A camera placement: where it is and what it looks at, in world space. */
+export interface ViewState {
+  position: Vec3;
+  target: Vec3;
+}
+
+export type SectionAxis = 'x' | 'y' | 'z';
+
+export interface SectionOptions {
+  enabled: boolean;
+  axis?: SectionAxis;
+  /** Where the cut lies across the model, from 0 (its low side) to 1 (its high side). */
+  position?: number;
+  /** Keep the other side of the cut. */
+  flip?: boolean;
+}
+
+export interface ScreenshotOptions {
+  /** Image type for canvas.toBlob, e.g. 'image/webp' (default) or 'image/png'. */
+  type?: string;
+  quality?: number;
+  /** Longest side of the image in pixels. Default: the canvas size. */
+  maxSize?: number;
 }
 
 export interface ModelInfo {
   url: string;
   triangles: number;
+  /** Bounding-sphere radius in world units; useful to scale UI hints. */
+  radius: number;
   /** Bounding-box size in model units. True metres once the pipeline outputs real scale (W05). */
   size: Vec3;
   /** Bounding-box centre in model units. */
@@ -43,6 +95,11 @@ export interface LoadOptions {
    * so `[0, -1, 0]` flips it. Pins and distances stay in the file's own coordinates.
    */
   up?: Vec3;
+  /**
+   * Whether 1 unit is 1 metre. False for a scan that has not been scaled yet: the ruler then
+   * shows plain units instead of millimetres. Default true (the glTF convention).
+   */
+  trueScale?: boolean;
   /** Extra HTTP request headers, for example `{ Authorization: 'Bearer <token>' }`. */
   headers?: Record<string, string>;
   /** Send cookies with a cross-origin request. Default false. */
@@ -104,8 +161,18 @@ export interface ViewerEvents {
   loaded: ModelInfo;
   /** `httpStatus` is set when a download failed with an HTTP status, e.g. 404. */
   error: { code: ViewerErrorCode; message: string; httpStatus?: number; cause?: unknown };
-  measure: { start: Vec3; end: Vec3; distance: number };
+  /** A measurement was completed. */
+  measure: Measurement;
+  /** The list of measurements changed (added, undone or cleared). */
+  'measurements-change': { measurements: Measurement[] };
+  /** The active tool changed, for example after Escape. */
+  'tool-change': { tool: Tool };
+  /** A pin label was clicked or activated with the keyboard. */
   'pin-click': { id: string };
+  /** In the 'annotate' tool, the surface point the user clicked, in model space. */
+  'pin-place': { position: Vec3; normal: Vec3 };
+  /** The user finished moving the camera, or a camera flight ended. */
+  'view-change': ViewState;
 }
 
 export type Unsubscribe = () => void;
@@ -114,7 +181,7 @@ export interface Viewer {
   /** Which GPU backend is actually in use. */
   readonly backend: RendererBackend;
   /**
-   * Load a .glb/.gltf, replacing the current model, and frame the camera on it.
+   * Load a .glb/.gltf/.ply, replacing the current model, and frame the camera on it.
    * A newer load() or dispose() cancels this one: the promise then rejects with an Error
    * whose `name` is 'AbortError', and no `error` event is emitted.
    */
@@ -127,12 +194,31 @@ export interface Viewer {
   setLighting(update: LightingUpdate): void;
   /** Change image-based lighting / background. Resolves when the new environment is active. */
   setEnvironment(options: EnvironmentOptions): Promise<void>;
-  /** Turn the two-click ruler on/off. STUB until W04. */
-  enableMeasure(on: boolean): void;
-  /** Show a pin. STUB until W05 (stores the pin, draws nothing yet). */
+  /** Move the camera closer (factor < 1) or further away (factor > 1). */
+  zoom(factor: number): void;
+  /** Current camera placement, for example to share it in a link. */
+  getView(): ViewState;
+  /** Move the camera; animated unless `animate` is false or the user prefers reduced motion. */
+  setView(view: ViewState, options?: { animate?: boolean }): void;
+  /** Choose what a click on the model does. Escape returns to 'orbit'. */
+  setTool(tool: Tool): void;
+  readonly tool: Tool;
+  getMeasurements(): Measurement[];
+  /** Remove the newest measurement (or the half-finished one). */
+  undoMeasurement(): void;
+  clearMeasurements(): void;
+  /** Replace all pins. Pins are drawn as numbered labels in list order. */
+  setPins(pins: Pin[]): void;
   addPin(pin: Pin): void;
-  /** Remove a pin. STUB until W05. */
   removePin(id: string): void;
+  /** Highlight one pin (or none). */
+  setActivePin(id: string | null): void;
+  /** Fly the camera to a pin and highlight it. */
+  focusPin(id: string): void;
+  /** Cut the model open with a plane, to look inside. */
+  setSection(options: SectionOptions): void;
+  /** The current view as an image, without pins and labels. */
+  screenshot(options?: ScreenshotOptions): Promise<Blob>;
   /** Subscribe to an event. Returns a function that unsubscribes. */
   on<K extends keyof ViewerEvents>(type: K, handler: (event: ViewerEvents[K]) => void): Unsubscribe;
   /** Stop rendering, free GPU memory, remove listeners and the canvas. */

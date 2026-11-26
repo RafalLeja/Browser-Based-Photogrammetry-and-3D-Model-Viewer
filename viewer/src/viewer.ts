@@ -1,32 +1,44 @@
-// One of three files that import three (with model.ts and shadow.ts). The frontend talks
-// only to the public API in types.ts, so it never depends on Three.js types.
+// One of the files that import three (with model.ts, shadow.ts and environments.ts). The
+// frontend talks only to the public API in types.ts, so it never depends on Three.js types.
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 
+import { disposeScene, outdoorScene, studioScene } from './environments';
 import { Emitter } from './events';
 import { fitDistance } from './framing';
 import { abortError, httpStatusOf, isAbortError, modelFormat, progressPayload } from './loading';
+import { distance, easeInOutCubic, formatLength, isViewState, lerpVec3, sectionPlane } from './measure';
 import { disposeModel, measureModel, orientUp, plyObject, prepareModel } from './model';
+import { Overlay, type MeasureView, type PinView, type ScreenPoint } from './overlay';
 import { ContactShadow } from './shadow';
 import type {
   EnvironmentOptions,
   EnvironmentPreset,
   LightingUpdate,
   LoadOptions,
+  Measurement,
   ModelInfo,
   Pin,
   RendererBackend,
+  ScreenshotOptions,
+  SectionOptions,
   ToneMappingName,
+  Tool,
   Unsubscribe,
   Vec3,
   Viewer,
   ViewerErrorCode,
   ViewerEvents,
   ViewerOptions,
+  ViewState,
 } from './types';
 
 /** Distance used to place the key light until a model has been framed. */
@@ -35,12 +47,21 @@ const DEFAULT_LIGHT_DISTANCE = 5;
 /** From the model's centre towards the camera: front-right and a little above. */
 const DEFAULT_VIEW_DIRECTION = new THREE.Vector3(1, 0.6, 1).normalize();
 
+/** A pointer that moves less than this between press and release is a click, not a drag. */
+const CLICK_SLOP_PX = 6;
+const CLICK_MAX_MS = 500;
+const FLIGHT_MS = 750;
+/** Pins hidden behind the model are re-checked at most this often while the camera moves. */
+const OCCLUSION_INTERVAL_MS = 120;
+
 const TONE_MAPPING: Record<ToneMappingName, THREE.ToneMapping> = {
   neutral: THREE.NeutralToneMapping,
   aces: THREE.ACESFilmicToneMapping,
   agx: THREE.AgXToneMapping,
   none: THREE.NoToneMapping,
 };
+
+type BvhGeometry = THREE.BufferGeometry & { boundsTree?: MeshBVH };
 
 export async function createViewer(
   container: HTMLElement,
@@ -58,7 +79,7 @@ export async function createViewer(
   // If WebGPU is unavailable, init() also switches to the WebGL 2 backend here.
   await renderer.init();
 
-  const viewer = new ViewerImpl(container, renderer);
+  const viewer = new ViewerImpl(container, renderer, options);
   try {
     await viewer.setEnvironment(options?.environment ?? { preset: 'room' });
   } catch (err) {
@@ -67,6 +88,10 @@ export async function createViewer(
     throw err;
   }
   return viewer;
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 class ViewerImpl implements Viewer {
@@ -82,13 +107,25 @@ class ViewerImpl implements Viewer {
   private readonly timer = new THREE.Timer();
   private readonly keyLight = new THREE.DirectionalLight('#ffffff', 1);
   private readonly keyLightDirection = new THREE.Vector3(1, 2, 1.5).normalize();
-  /** Holds the current glTF scene, so replacing a model never touches lights or camera. */
-  private readonly modelRoot = new THREE.Group();
+  /** Holds the current model, so replacing it never touches lights or camera. It also clips sections. */
+  private readonly modelRoot = new THREE.ClippingGroup();
+  private readonly sectionPlane = new THREE.Plane();
   private readonly shadow = new ContactShadow();
+  private readonly overlay: Overlay;
+  private readonly raycaster = new THREE.Raycaster() as THREE.Raycaster & { firstHitOnly?: boolean };
   private readonly pins = new Map<string, Pin>();
+  private readonly occluded = new Set<string>();
   /** Texture sharpness at flat viewing angles: 8 looks sharp and stays cheap on any GPU. */
   private readonly anisotropy: number;
+  private readonly decoderPath: string;
+  private readonly removeListeners: () => void;
 
+  private draco: DRACOLoader | null = null;
+  private ktx2: KTX2Loader | null = null;
+  /** The loaded model inside modelRoot. Pins and measurements live in its coordinates. */
+  private model: THREE.Object3D | null = null;
+  private modelBox = new THREE.Box3();
+  private trueScale = true;
   private lightDistance = DEFAULT_LIGHT_DISTANCE;
   /** Bounding sphere of the current model; null until the first load(). */
   private modelSphere: THREE.Sphere | null = null;
@@ -99,15 +136,29 @@ class ViewerImpl implements Viewer {
   /** Original panorama we own: PMREM output is too blurry to use as a background. */
   private equirect: THREE.Texture | null = null;
   private showBackground = false;
-  private measureEnabled = false;
   private disposed = false;
   /** Belongs to the newest load(). Aborting it cancels that download. */
   private loadManager: THREE.LoadingManager | null = null;
   // Lets the newest environment win when HDR downloads overlap.
   private envRequest = 0;
 
-  constructor(container: HTMLElement, renderer: THREE.WebGPURenderer) {
+  private currentTool: Tool = 'orbit';
+  private measurements: Measurement[] = [];
+  private measureCount = 0;
+  private pendingStart: Vec3 | null = null;
+  private hoverPoint: Vec3 | null = null;
+  private pointerDown: { x: number; y: number; time: number } | null = null;
+  private hoverFrame = 0;
+  private activePin: string | null = null;
+  private flight: { from: ViewState; to: ViewState; start: number } | null = null;
+  /** Render-on-demand: set whenever the picture may have changed. */
+  private needsRender = true;
+  private lastOcclusion = 0;
+  private occlusionStale = false;
+
+  constructor(container: HTMLElement, renderer: THREE.WebGPURenderer, options?: ViewerOptions) {
     this.renderer = renderer;
+    this.decoderPath = options?.decoderPath ?? '/decoders/';
 
     // Narrow cast: @types/three declares this flag only on the WebGPUBackend subclass,
     // while renderer.backend is typed as the shared base class.
@@ -130,15 +181,25 @@ class ViewerImpl implements Viewer {
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = 1;
 
+    if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
     const canvas = renderer.domElement;
     canvas.style.width = '100%';
     canvas.style.height = '100%';
     canvas.style.display = 'block';
+    canvas.style.touchAction = 'none';
+    canvas.tabIndex = 0;
+    canvas.setAttribute(
+      'aria-label',
+      `${options?.label ?? '3D model viewer'}. Drag to rotate, scroll or pinch to zoom. With the view focused, arrow keys pan and Shift with arrow keys rotates.`,
+    );
     container.appendChild(canvas);
+    this.overlay = new Overlay(container, (id) => this.emitter.emit('pin-click', { id }));
 
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
     this.camera.position.set(3, 2, 3); // Replaced by auto-framing on the first load().
 
+    this.modelRoot.enabled = false;
+    this.modelRoot.clippingPlanes = [this.sectionPlane];
     this.scene.add(this.modelRoot, this.shadow.mesh);
 
     // A light's direction runs from its position to its target, so the target must be
@@ -155,10 +216,18 @@ class ViewerImpl implements Viewer {
     this.controls.zoomToCursor = true;
     // A grab hand over the canvas shows that the model can be dragged.
     this.controls.cursorStyle = 'grab';
+    this.controls.listenToKeyEvents(canvas);
     // 'start' fires on the first pointer or wheel input of a gesture.
     this.controls.addEventListener('start', () => {
       this.userMovedCamera = true;
+      this.flight = null; // The user takes over from a running flight.
     });
+    this.controls.addEventListener('change', () => {
+      this.needsRender = true;
+    });
+    this.controls.addEventListener('end', () => this.emitter.emit('view-change', this.getView()));
+
+    this.raycaster.firstHitOnly = true;
 
     // Created after init() and reused, because it holds its own GPU resources.
     this.pmrem = new THREE.PMREMGenerator(renderer);
@@ -181,20 +250,22 @@ class ViewerImpl implements Viewer {
       if (!this.userMovedCamera) {
         this.placeCamera(this.camera.position.clone().sub(this.controls.target).normalize());
       }
+      this.needsRender = true;
     };
     resize();
     this.resizeObserver = new ResizeObserver(resize);
     this.resizeObserver.observe(container);
 
-    // Damping needs controls.update() every frame. Render-on-demand comes in W07.
+    this.removeListeners = this.listenForClicks(canvas);
+
     // The timer measures the time between frames, so auto-rotate turns at the same speed on a
     // 60 Hz and a 120 Hz display. connect() makes it ignore time spent in a background tab.
     this.timer.connect(document);
-    void renderer.setAnimationLoop((time) => {
-      this.timer.update(time);
-      this.controls.update(this.timer.getDelta());
-      renderer.render(this.scene, this.camera);
-    });
+    void renderer.setAnimationLoop((time) => this.frame(time));
+  }
+
+  get tool(): Tool {
+    return this.currentTool;
   }
 
   async load(url: string, options?: LoadOptions): Promise<ModelInfo> {
@@ -206,7 +277,7 @@ class ViewerImpl implements Viewer {
     this.loadManager = manager;
 
     const format = options?.format ?? modelFormat(url);
-    const loader = format === 'ply' ? new PLYLoader(manager) : new GLTFLoader(manager);
+    const loader = format === 'ply' ? new PLYLoader(manager) : this.gltfLoader(manager);
     if (options?.headers) loader.setRequestHeader(options.headers);
     if (options?.withCredentials) loader.setWithCredentials(true);
 
@@ -256,11 +327,16 @@ class ViewerImpl implements Viewer {
     // The old model is removed only now, so a failed load keeps the current model on screen.
     disposeModel(this.modelRoot);
     this.modelRoot.clear();
+    this.clearTools();
 
     // The model is not recentred or rescaled: pins are stored in model space and the
     // ruler needs true scale. The camera moves to the model instead.
     // modelRoot sits at the origin unrotated, so the box measured above is still correct.
     this.modelRoot.add(model);
+    model.updateWorldMatrix(true, true);
+    this.model = model;
+    this.modelBox = box.clone();
+    this.trueScale = options?.trueScale ?? true;
 
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
@@ -272,11 +348,15 @@ class ViewerImpl implements Viewer {
     this.shadow.update(this.renderer, this.scene, this.modelRoot, box);
 
     this.modelSphere = new THREE.Sphere(center, radius);
+    this.raycaster.params.Points.threshold = radius * 0.005;
     this.placeCamera(DEFAULT_VIEW_DIRECTION);
+    this.overlay.syncPins([...this.pins.values()]);
+    this.needsRender = true;
 
     const info: ModelInfo = {
       url,
       triangles,
+      radius,
       size: toVec3(size),
       center: toVec3(center),
     };
@@ -285,12 +365,46 @@ class ViewerImpl implements Viewer {
   }
 
   resetView(): void {
-    this.placeCamera(DEFAULT_VIEW_DIRECTION);
+    if (!this.modelSphere) return;
+    const { center, radius } = this.modelSphere;
+    const distanceToFit = fitDistance(radius, THREE.MathUtils.degToRad(this.camera.fov), this.camera.aspect);
+    const position = center.clone().addScaledVector(DEFAULT_VIEW_DIRECTION, distanceToFit);
+    this.setView({ position: toVec3(position), target: toVec3(center) });
+    this.userMovedCamera = false;
   }
 
   setAutoRotate(on: boolean): void {
     // OrbitControls turns 30 seconds per turn at its default speed and pauses while dragged.
-    this.controls.autoRotate = on;
+    this.controls.autoRotate = on && !prefersReducedMotion();
+    this.needsRender = true;
+  }
+
+  zoom(factor: number): void {
+    if (!(factor > 0)) return;
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const length = THREE.MathUtils.clamp(offset.length() * factor, this.controls.minDistance, this.controls.maxDistance);
+    this.camera.position.copy(this.controls.target).addScaledVector(offset.normalize(), length);
+    this.controls.update();
+    this.userMovedCamera = true;
+    this.needsRender = true;
+    this.emitter.emit('view-change', this.getView());
+  }
+
+  getView(): ViewState {
+    return { position: toVec3(this.camera.position), target: toVec3(this.controls.target) };
+  }
+
+  setView(view: ViewState, options?: { animate?: boolean }): void {
+    if (!isViewState(view)) return;
+    this.userMovedCamera = true;
+    if ((options?.animate ?? true) && !prefersReducedMotion()) {
+      this.flight = { from: this.getView(), to: view, start: performance.now() };
+    } else {
+      this.flight = null;
+      this.applyView(view);
+      this.emitter.emit('view-change', this.getView());
+    }
+    this.needsRender = true;
   }
 
   setLighting(update: LightingUpdate): void {
@@ -312,6 +426,7 @@ class ViewerImpl implements Viewer {
     if (update.groundShadow?.opacity !== undefined) {
       this.shadow.setOpacity(update.groundShadow.opacity);
     }
+    this.needsRender = true;
   }
 
   /**
@@ -344,23 +459,117 @@ class ViewerImpl implements Viewer {
     if (options.intensity !== undefined) this.scene.environmentIntensity = options.intensity;
     if (options.showBackground !== undefined) this.showBackground = options.showBackground;
     this.scene.background = this.showBackground && this.equirect ? this.equirect : null;
+    this.needsRender = true;
   }
 
-  enableMeasure(on: boolean): void {
-    this.measureEnabled = on;
-    console.warn('[viewer] enableMeasure not implemented yet (W04)', {
-      enabled: this.measureEnabled,
-    });
+  setTool(tool: Tool): void {
+    if (tool === this.currentTool) return;
+    this.currentTool = tool;
+    this.pendingStart = null;
+    this.hoverPoint = null;
+    // The grab hand says "drag me"; a crosshair says "click a point".
+    this.controls.cursorStyle = tool === 'orbit' ? 'grab' : 'auto';
+    this.renderer.domElement.style.cursor = tool === 'orbit' ? '' : 'crosshair';
+    if (tool !== 'orbit') this.ensureBvh();
+    this.needsRender = true;
+    this.emitter.emit('tool-change', { tool });
+  }
+
+  getMeasurements(): Measurement[] {
+    return this.measurements.map((m) => ({ ...m }));
+  }
+
+  undoMeasurement(): void {
+    if (this.pendingStart) {
+      this.pendingStart = null;
+    } else if (this.measurements.length > 0) {
+      this.measurements = this.measurements.slice(0, -1);
+      this.emitter.emit('measurements-change', { measurements: this.getMeasurements() });
+    }
+    this.needsRender = true;
+  }
+
+  clearMeasurements(): void {
+    this.pendingStart = null;
+    if (this.measurements.length > 0) {
+      this.measurements = [];
+      this.emitter.emit('measurements-change', { measurements: [] });
+    }
+    this.needsRender = true;
+  }
+
+  setPins(pins: Pin[]): void {
+    this.pins.clear();
+    for (const pin of pins) this.pins.set(pin.id, pin);
+    this.overlay.syncPins(pins);
+    if (pins.length > 0) this.ensureBvh();
+    this.occlusionStale = true;
+    this.needsRender = true;
   }
 
   addPin(pin: Pin): void {
     this.pins.set(pin.id, pin);
-    console.warn('[viewer] addPin stores the pin but does not draw it yet (W05)');
+    this.setPins([...this.pins.values()]);
   }
 
   removePin(id: string): void {
     this.pins.delete(id);
-    console.warn('[viewer] removePin removes the stored pin; pins are not drawn yet (W05)');
+    if (this.activePin === id) this.setActivePin(null);
+    this.setPins([...this.pins.values()]);
+  }
+
+  setActivePin(id: string | null): void {
+    this.activePin = id;
+    this.overlay.setActivePin(id);
+  }
+
+  focusPin(id: string): void {
+    const pin = this.pins.get(id);
+    if (!pin || !this.model || !this.modelSphere) return;
+    const point = this.toWorld(pin.position);
+    const normal = this.toWorldDirection(pin.normal);
+    const current = this.camera.position.clone().sub(this.controls.target).normalize();
+    // Mostly in front of the surface, keeping a little of the current angle so the move feels natural.
+    const direction = normal.multiplyScalar(0.75).add(current.multiplyScalar(0.25)).normalize();
+    const close = Math.max(this.modelSphere.radius * 1.1, this.controls.minDistance * 1.2);
+    this.setView({ position: toVec3(point.clone().addScaledVector(direction, close)), target: toVec3(point) });
+    this.setActivePin(id);
+  }
+
+  setSection(options: SectionOptions): void {
+    this.modelRoot.enabled = options.enabled;
+    if (options.enabled) {
+      const plane = sectionPlane(
+        toVec3(this.modelBox.min),
+        toVec3(this.modelBox.max),
+        options.axis ?? 'y',
+        options.position ?? 0.5,
+        options.flip ?? false,
+      );
+      this.sectionPlane.normal.set(...plane.normal);
+      this.sectionPlane.constant = plane.constant;
+    }
+    this.raycaster.firstHitOnly = !options.enabled; // Hits on the cut-away side must be skipped.
+    this.occlusionStale = true;
+    this.needsRender = true;
+  }
+
+  screenshot(options?: ScreenshotOptions): Promise<Blob> {
+    const canvas = this.renderer.domElement;
+    // Render and copy in the same task: the drawing buffer is only guaranteed until it is shown.
+    this.renderer.render(this.scene, this.camera);
+    const scale = options?.maxSize ? Math.min(1, options.maxSize / Math.max(canvas.width, canvas.height)) : 1;
+    const copy = document.createElement('canvas');
+    copy.width = Math.round(canvas.width * scale);
+    copy.height = Math.round(canvas.height * scale);
+    copy.getContext('2d')?.drawImage(canvas, 0, 0, copy.width, copy.height);
+    return new Promise((resolve, reject) => {
+      copy.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(new Error('[viewer] The browser could not encode the screenshot'))),
+        options?.type ?? 'image/webp',
+        options?.quality ?? 0.9,
+      );
+    });
   }
 
   on<K extends keyof ViewerEvents>(
@@ -380,19 +589,260 @@ class ViewerImpl implements Viewer {
     this.envRequest++;
 
     void this.renderer.setAnimationLoop(null);
+    cancelAnimationFrame(this.hoverFrame);
+    this.removeListeners();
     this.timer.dispose();
     this.resizeObserver.disconnect();
     this.controls.dispose();
 
     disposeModel(this.modelRoot);
     this.modelRoot.clear();
+    this.model = null;
     this.shadow.dispose();
     this.replaceEnvironment(null, null);
     this.pmrem.dispose();
+    this.draco?.dispose();
+    this.ktx2?.dispose();
+    this.overlay.dispose();
 
     void this.renderer.dispose(); // Asynchronous since r186; nothing here depends on it finishing.
     this.renderer.domElement.remove();
     this.emitter.clear();
+  }
+
+  // ---------------------------------------------------------------------------------------------
+
+  private frame(time: number): void {
+    this.timer.update(time);
+    const now = performance.now();
+    if (this.flight) {
+      const t = Math.min(1, (now - this.flight.start) / FLIGHT_MS);
+      const eased = easeInOutCubic(t);
+      this.applyView({
+        position: lerpVec3(this.flight.from.position, this.flight.to.position, eased),
+        target: lerpVec3(this.flight.from.target, this.flight.to.target, eased),
+      });
+      if (t >= 1) {
+        this.flight = null;
+        this.emitter.emit('view-change', this.getView());
+      }
+      this.needsRender = true;
+    }
+    // update() returns true while damping or auto-rotate still moves the camera.
+    const moved = this.controls.update(this.timer.getDelta());
+    if (moved) this.occlusionStale = true;
+    const occlusionDue = this.occlusionStale && now - this.lastOcclusion > OCCLUSION_INTERVAL_MS;
+    if (!moved && !this.needsRender && !occlusionDue) return; // Nothing changed: skip the frame.
+    this.needsRender = false;
+    this.renderer.render(this.scene, this.camera);
+    if (occlusionDue) {
+      this.updateOcclusion();
+      this.lastOcclusion = now;
+      this.occlusionStale = moved;
+    }
+    this.renderOverlay();
+  }
+
+  private applyView(view: ViewState): void {
+    this.camera.position.set(...view.position);
+    this.controls.target.set(...view.target);
+    this.controls.update();
+    this.keyLight.target.position.copy(this.controls.target);
+    this.updateKeyLightPosition();
+  }
+
+  private gltfLoader(manager: THREE.LoadingManager): GLTFLoader {
+    // Decoders are created on the first glTF load and fetched only if a file needs them.
+    this.draco ??= new DRACOLoader().setDecoderPath(`${this.decoderPath}draco/`);
+    this.ktx2 ??= new KTX2Loader().setTranscoderPath(`${this.decoderPath}basis/`).detectSupport(this.renderer);
+    return new GLTFLoader(manager).setDRACOLoader(this.draco).setKTX2Loader(this.ktx2).setMeshoptDecoder(MeshoptDecoder);
+  }
+
+  private listenForClicks(canvas: HTMLCanvasElement): () => void {
+    const onDown = (event: PointerEvent) => {
+      if (event.button === 0) this.pointerDown = { x: event.clientX, y: event.clientY, time: performance.now() };
+    };
+    const onUp = (event: PointerEvent) => {
+      const down = this.pointerDown;
+      this.pointerDown = null;
+      if (!down || event.button !== 0 || this.currentTool === 'orbit') return;
+      const moved = Math.hypot(event.clientX - down.x, event.clientY - down.y);
+      if (moved < CLICK_SLOP_PX && performance.now() - down.time < CLICK_MAX_MS) this.onClick(event);
+    };
+    const onMove = (event: PointerEvent) => {
+      if (this.currentTool !== 'measure' || !this.pendingStart || this.pointerDown) return;
+      cancelAnimationFrame(this.hoverFrame);
+      const { clientX, clientY } = event;
+      // At most one raycast per frame while the pointer moves.
+      this.hoverFrame = requestAnimationFrame(() => {
+        const hit = this.pick(clientX, clientY);
+        this.hoverPoint = hit ? this.toModel(hit.point) : null;
+        this.needsRender = true;
+      });
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || this.currentTool === 'orbit') return;
+      if (this.pendingStart) {
+        this.pendingStart = null;
+        this.hoverPoint = null;
+        this.needsRender = true;
+      } else {
+        this.setTool('orbit');
+      }
+    };
+    canvas.addEventListener('pointerdown', onDown);
+    canvas.addEventListener('pointerup', onUp);
+    canvas.addEventListener('pointermove', onMove);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      canvas.removeEventListener('pointerdown', onDown);
+      canvas.removeEventListener('pointerup', onUp);
+      canvas.removeEventListener('pointermove', onMove);
+      window.removeEventListener('keydown', onKey);
+    };
+  }
+
+  private onClick(event: PointerEvent): void {
+    const hit = this.pick(event.clientX, event.clientY);
+    if (!hit) return;
+    const point = this.toModel(hit.point);
+    if (this.currentTool === 'annotate') {
+      const faceNormal = hit.face?.normal ?? new THREE.Vector3(0, 1, 0);
+      const worldNormal = faceNormal.clone().transformDirection(hit.object.matrixWorld);
+      // A surface seen from behind (double-sided scans) should get a pin facing the camera.
+      if (worldNormal.dot(this.raycaster.ray.direction) > 0) worldNormal.negate();
+      this.emitter.emit('pin-place', { position: point, normal: this.toModelDirection(worldNormal) });
+      return;
+    }
+    if (!this.pendingStart) {
+      this.pendingStart = point;
+    } else {
+      const measurement: Measurement = {
+        id: `m${++this.measureCount}`,
+        start: this.pendingStart,
+        end: point,
+        distance: distance(this.pendingStart, point),
+      };
+      this.measurements = [...this.measurements, measurement];
+      this.pendingStart = null;
+      this.hoverPoint = null;
+      this.emitter.emit('measure', { ...measurement });
+      this.emitter.emit('measurements-change', { measurements: this.getMeasurements() });
+    }
+    this.needsRender = true;
+  }
+
+  /** Builds a bounding-volume tree per mesh once, so each raycast takes microseconds, not a full scan. */
+  private ensureBvh(): void {
+    this.model?.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const geometry = mesh.geometry as BvhGeometry;
+      if (!geometry.boundsTree) {
+        geometry.boundsTree = new MeshBVH(geometry);
+        mesh.raycast = acceleratedRaycast;
+      }
+    });
+  }
+
+  private pick(clientX: number, clientY: number): THREE.Intersection | null {
+    if (!this.model) return null;
+    this.ensureBvh();
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(ndc, this.camera);
+    return this.firstVisibleHit(this.raycaster.intersectObject(this.model, true));
+  }
+
+  private firstVisibleHit(hits: THREE.Intersection[]): THREE.Intersection | null {
+    if (!this.modelRoot.enabled) return hits[0] ?? null;
+    return hits.find((hit) => this.sectionPlane.distanceToPoint(hit.point) >= 0) ?? null;
+  }
+
+  private updateOcclusion(): void {
+    this.occluded.clear();
+    if (!this.model || this.pins.size === 0) return;
+    const origin = this.camera.position;
+    const tolerance = (this.modelSphere?.radius ?? 1) * 0.02;
+    for (const pin of this.pins.values()) {
+      const point = this.toWorld(pin.position);
+      const toPin = point.clone().sub(origin);
+      const length = toPin.length();
+      this.raycaster.set(origin, toPin.divideScalar(length));
+      this.raycaster.far = length;
+      const hit = this.firstVisibleHit(this.raycaster.intersectObject(this.model, true));
+      if (hit && hit.distance < length - tolerance) this.occluded.add(pin.id);
+    }
+    this.raycaster.far = Infinity;
+  }
+
+  private renderOverlay(): void {
+    const pins: PinView[] = [...this.pins.values()].map((pin) => {
+      const world = this.toWorld(pin.position);
+      const point = this.project(world);
+      // A pin on the part a section cuts away would float in the air, so it is hidden.
+      if (this.modelRoot.enabled && this.sectionPlane.distanceToPoint(world) < 0) point.visible = false;
+      return { id: pin.id, title: pin.title, point, occluded: this.occluded.has(pin.id) };
+    });
+    const measures: MeasureView[] = this.measurements.map((m) => ({
+      id: m.id,
+      a: this.project(this.toWorld(m.start)),
+      b: this.project(this.toWorld(m.end)),
+      label: formatLength(m.distance, this.trueScale),
+    }));
+    if (this.pendingStart) {
+      const a = this.project(this.toWorld(this.pendingStart));
+      const end = this.hoverPoint ?? this.pendingStart;
+      measures.push({
+        id: 'pending',
+        a,
+        b: this.project(this.toWorld(end)),
+        label: this.hoverPoint ? formatLength(distance(this.pendingStart, this.hoverPoint), this.trueScale) : '',
+        pending: true,
+      });
+    }
+    this.overlay.render(pins, measures);
+  }
+
+  private project(world: THREE.Vector3): ScreenPoint {
+    const ndc = world.clone().project(this.camera);
+    const canvas = this.renderer.domElement;
+    return {
+      x: ((ndc.x + 1) / 2) * canvas.clientWidth,
+      y: ((1 - ndc.y) / 2) * canvas.clientHeight,
+      visible: ndc.z > -1 && ndc.z < 1,
+    };
+  }
+
+  private toWorld(point: Vec3): THREE.Vector3 {
+    const vector = new THREE.Vector3(...point);
+    return this.model ? this.model.localToWorld(vector) : vector;
+  }
+
+  private toModel(world: THREE.Vector3): Vec3 {
+    return toVec3(this.model ? this.model.worldToLocal(world.clone()) : world);
+  }
+
+  private toWorldDirection(direction: Vec3): THREE.Vector3 {
+    const vector = new THREE.Vector3(...direction);
+    return this.model ? vector.transformDirection(this.model.matrixWorld) : vector.normalize();
+  }
+
+  private toModelDirection(world: THREE.Vector3): Vec3 {
+    const inverse = this.model ? this.model.matrixWorld.clone().invert() : new THREE.Matrix4();
+    return toVec3(world.clone().transformDirection(inverse));
+  }
+
+  private clearTools(): void {
+    this.measurements = [];
+    this.pendingStart = null;
+    this.hoverPoint = null;
+    this.occluded.clear();
+    this.flight = null;
+    this.emitter.emit('measurements-change', { measurements: [] });
   }
 
   /**
@@ -403,14 +853,14 @@ class ViewerImpl implements Viewer {
     if (!this.modelSphere) return; // Nothing to frame before the first load().
     const { center, radius } = this.modelSphere;
 
-    const distance = fitDistance(radius, THREE.MathUtils.degToRad(this.camera.fov), this.camera.aspect);
-    this.camera.position.copy(center).addScaledVector(direction, distance);
+    const distanceToFit = fitDistance(radius, THREE.MathUtils.degToRad(this.camera.fov), this.camera.aspect);
+    this.camera.position.copy(center).addScaledVector(direction, distanceToFit);
 
     // Scaling near and far with the model keeps depth precision usable for any model size.
     // near comes from the radius, not the distance: a narrow container moves the camera back,
     // and a near plane taken from that distance could cut into the model when zooming in.
     this.camera.near = radius / 100;
-    this.camera.far = distance * 100;
+    this.camera.far = distanceToFit * 100;
     this.camera.updateProjectionMatrix();
 
     this.controls.target.copy(center);
@@ -418,15 +868,16 @@ class ViewerImpl implements Viewer {
     this.controls.cursor.copy(center);
     this.controls.maxTargetRadius = radius;
     this.controls.minDistance = radius * 0.2;
-    this.controls.maxDistance = distance * 5;
+    this.controls.maxDistance = distanceToFit * 5;
     this.controls.update();
 
     this.keyLight.target.position.copy(center);
-    this.lightDistance = distance;
+    this.lightDistance = distanceToFit;
     this.updateKeyLightPosition();
 
-    // load() and resetView() hand the framing back to the viewer until the user moves again.
+    // load() hands the framing back to the viewer until the user moves again.
     this.userMovedCamera = false;
+    this.needsRender = true;
   }
 
   private updateKeyLightPosition(): void {
@@ -436,24 +887,22 @@ class ViewerImpl implements Viewer {
   }
 
   private applyPreset(preset: EnvironmentPreset): void {
-    switch (preset) {
-      case 'room': {
-        this.envRequest++;
-        const room = new RoomEnvironment();
-        const target = this.pmrem.fromScene(room);
-        room.dispose(); // Only needed to bake the PMREM, which is now a separate texture.
-        this.replaceEnvironment(target, null);
-        break;
-      }
-      case 'none':
-        this.envRequest++;
-        this.replaceEnvironment(null, null);
-        break;
-      case 'studio':
-      case 'outdoor':
-        console.warn('[viewer] preset "studio"/"outdoor" not implemented yet (W06)');
-        break;
+    this.envRequest++;
+    if (preset === 'none') {
+      this.replaceEnvironment(null, null);
+      return;
     }
+    if (preset === 'room') {
+      const room = new RoomEnvironment();
+      const target = this.pmrem.fromScene(room, 0.04);
+      room.dispose(); // Only needed to bake the PMREM, which is now a separate texture.
+      this.replaceEnvironment(target, null);
+      return;
+    }
+    const scene = preset === 'studio' ? studioScene() : outdoorScene();
+    const target = this.pmrem.fromScene(scene, 0.04);
+    disposeScene(scene);
+    this.replaceEnvironment(target, null);
   }
 
   private replaceEnvironment(
@@ -468,6 +917,7 @@ class ViewerImpl implements Viewer {
     this.equirect?.dispose();
     this.envTarget = target;
     this.equirect = equirect;
+    this.needsRender = true;
   }
 
   /** Reports a failure to listeners and returns the Error the caller should reject with. */
