@@ -59,9 +59,13 @@ viewer.dispose();
 | `setTool(tool)` / `tool` | `'orbit'`, `'measure'` (two clicks per distance) or `'annotate'` (a click emits `pin-place`); Escape returns to orbit |
 | `getMeasurements()`, `undoMeasurement()`, `clearMeasurements()` | Ruler results in model space |
 | `setPins(pins)`, `addPin(pin)`, `removePin(id)` | Numbered HTML pins, dimmed when hidden behind the model |
-| `setActivePin(id)`, `focusPin(id)` | Highlight a pin; fly the camera to it |
+| `setActivePin(id)`, `focusPin(id, { animate })` | Highlight a pin; fly (or jump) the camera to it |
+| `viewFrom(direction, { animate })` | Look at the whole model from a direction, e.g. `[0, 0.3, 1]` for the front |
+| `setRenderMode(mode)` / `renderMode` | `'standard'`, `'clay'`, `'wireframe'` or `'normals'`; point clouds keep their colours |
+| `setDimensions(show)` | Bounding box with its width, depth and height labelled |
+| `exportModel('stl' \| 'obj', { scale })` | The model as a binary STL or OBJ `Blob`, turned to Z up; `scale: 1000` gives millimetres |
 | `setSection({ enabled, axis, position, flip })` | Cut the model with a plane; `position` runs 0–1 across the model |
-| `screenshot({ type, quality, maxSize })` | The current view as a `Blob` (without pins and labels) |
+| `screenshot({ type, quality, maxSize, fit, aspect, background })` | The current view as a `Blob` (without pins and labels); `fit: 'subject'` crops to the model |
 | `on(event, handler)` | Subscribe; returns an unsubscribe function |
 | `dispose()` | Stops rendering and frees GPU memory |
 
@@ -79,7 +83,7 @@ viewer.dispose();
 | Event | Payload |
 |---|---|
 | `progress` | `{ url, loaded, total }`; `total` is `null` when the size cannot be trusted |
-| `loaded` | `{ url, triangles, radius, size, center }` |
+| `loaded` | `{ url, triangles, stats, radius, size, center }`; `stats` counts meshes, points, vertices, materials, textures and tells whether colours are per vertex |
 | `error` | `{ code: 'load' \| 'environment' \| 'device-lost', message, httpStatus?, cause? }` |
 | `measure` | `{ id, start, end, distance }` when a measurement completes |
 | `measurements-change` | `{ measurements }` after add, undo or clear |
@@ -87,16 +91,20 @@ viewer.dispose();
 | `pin-click` | `{ id }` |
 | `pin-place` | `{ position, normal }` in model space (annotate tool) |
 | `view-change` | `{ position, target }` after the user moves the camera or a flight ends |
+| `camera-move` | `{ position, target }` on every frame the camera moves, for linking two viewers |
 
 ### Behaviour to rely on
 
 - **Units:** 1 unit = 1 m, +Y up. Models are never recentred or rescaled; the camera moves instead.
+- **Inside a page:** `createViewer(container, { cooperativeGestures: true })` lets the page keep
+  its scrolling: a plain wheel scrolls, Ctrl/⌘ + wheel zooms, a vertical swipe scrolls the page.
 - **Render on demand:** frames are drawn only when something changes, so an idle viewer costs
   almost nothing.
 - **Fast picking:** a bounding-volume tree is built per mesh the first time a tool needs it.
 - **Overlays:** pins, ruler lines and labels are HTML/SVG in `.vw-overlay`; style them with the
   public classes `.vw-pin`, `.vw-measure`, `.vw-measure-label`, `.vw-dot` and the
-  `data-active` / `data-occluded` / `data-pending` attributes.
+  `data-active` / `data-occluded` / `data-pending` / `data-kind` attributes (`data-kind` comes from
+  a pin's `kind`, and is `dimension` on the bounding-box labels).
 - **Accessibility:** the canvas is focusable with an accessible name; arrow keys pan and
   Shift + arrows rotate; pins are buttons named after their notes.
 - **Compressed models:** meshopt is built in; Draco and KTX2 decoders are fetched from
@@ -113,12 +121,15 @@ src/
 ├─ auth.tsx                 Session state and the curator route guard
 ├─ styles.css               Design tokens (light and dark) and all styles
 ├─ components/              Layout, icons, toasts, dialogs, ModelStage (React wrapper of the viewer)
-├─ pages/                   home, gallery, viewerpage + object-panels, upload, jobs, guide, misc
-├─ lib/                     Pure helpers tested in Node: formatting, photo checks, job states
+├─ components/palette.tsx   The Ctrl/⌘+K command palette
+├─ pages/                   home, gallery, viewerpage + object-panels, report, compare, kiosk,
+│                           dashboard, upload, jobs, guide, misc
+├─ lib/                     Pure helpers tested in Node: formatting, photo selection and quality,
+│                           museum vocabulary and citations, lighting, kiosk loop, job states
 └─ viewer.ts, overlay.ts, environments.ts, measure.ts, model.ts, shadow.ts, …   The viewer
 scripts/
 ├─ optimize-glb.mjs         meshopt compression, also run by the reconstruction worker
-└─ screenshots.mjs          Regenerates the README screenshots
+└─ screenshots.mjs          Regenerates the README screenshots and the home page's feature images
 e2e/                        Playwright tests and the throw-away API they start
 test/                       Unit tests
 ```

@@ -18,7 +18,7 @@ measurable model, and let anyone turn, measure, annotate, relight and share it i
 
 [Features](#features) · [Quick start](#quick-start) · [Architecture](#architecture) · [Testing](#testing) · [Deployment](#deployment) · [Docs](#documentation)
 
-<img src="docs/images/home.png" alt="Vitrine landing page" width="900" />
+<img src="docs/images/home.jpg" alt="Vitrine landing page" width="900" />
 
 </div>
 
@@ -42,43 +42,69 @@ that runs in any modern browser**.
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/object-notes.png" alt="Object page with notes" /></td>
-<td width="50%"><img src="docs/images/object-tools.png" alt="Ruler and section plane" /></td>
+<td width="50%"><img src="docs/images/object-notes.jpg" alt="Object page with categorised notes" /></td>
+<td width="50%"><img src="docs/images/inspect.jpg" alt="Clay render mode with labelled dimensions" /></td>
 </tr>
 <tr>
-<td><b>Notes on the surface.</b> Numbered pins fly the camera to each note; a guided tour steps through them.</td>
-<td><b>Measure and look inside.</b> Two-click ruler (true millimetres when the scan is scaled) and an X/Y/Z section plane.</td>
+<td><b>Notes on the surface.</b> Pins by category (note, detail, inscription, damage with a severity, repair) fly the camera to each note; a guided tour plays them in order.</td>
+<td><b>Inspect the shape.</b> Colour, clay, wireframe and normals views, overall dimensions on the bounding box, and model statistics.</td>
 </tr>
 <tr>
-<td width="50%"><img src="docs/images/create.png" alt="New scan upload page" /></td>
-<td width="50%"><img src="docs/images/job.png" alt="Reconstruction job timeline" /></td>
+<td width="50%"><img src="docs/images/raking.jpg" alt="Raking light on the eagle" /></td>
+<td width="50%"><img src="docs/images/report.jpg" alt="Printable condition report" /></td>
 </tr>
 <tr>
-<td><b>Upload with confidence.</b> Drag and drop photos, folders or zips; files are checked in the browser and a coverage meter guides the photo count.</td>
-<td><b>Follow the reconstruction.</b> Live stage timeline with durations, log, cancel and retry.</td>
+<td><b>Raking light.</b> A low light from one side, as conservators use it, sweeps around the object to reveal relief, tool marks and cracks.</td>
+<td><b>Condition reports.</b> Four overall views and a close-up of every note, damage first by severity, ready to print or save as PDF.</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/images/compare.jpg" alt="Two scans side by side with linked cameras" /></td>
+<td width="50%"><img src="docs/images/kiosk.jpg" alt="Kiosk mode presenting the eagle" /></td>
+</tr>
+<tr>
+<td><b>Compare.</b> Two objects side by side; turn one and the other follows at the same angle and relative zoom.</td>
+<td><b>Kiosk mode.</b> An attract loop for a gallery screen that tours each object's notes and hands control to a visitor on touch.</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/images/create.jpg" alt="Upload with the photo check" /></td>
+<td width="50%"><img src="docs/images/dashboard.jpg" alt="Curator dashboard" /></td>
+</tr>
+<tr>
+<td><b>Every photo checked.</b> Blur, exposure, duplicates and resolution are checked in the browser before anything is uploaded.</td>
+<td><b>Curator dashboard.</b> Objects, visits, notes, reconstruction times and storage, with charts and table views.</td>
 </tr>
 </table>
 
 **Viewer** · WebGPU with automatic WebGL 2 fallback · GLB/glTF and PLY · Draco, meshopt and KTX2
-decoding · ruler with undo · annotation pins with occlusion dimming · camera flights and guided
-tour · section plane · studio, outdoor and room lighting with exposure and a movable key light ·
-screenshots · shareable views and iframe embeds · render on demand · keyboard shortcuts
-(<kbd>M</kbd> measure, <kbd>N</kbd> note, <kbd>S</kbd> section, <kbd>R</kbd> reset, <kbd>F</kbd> full screen).
+decoding · ruler with undo · categorised annotation pins with occlusion dimming · camera flights
+and guided tour · section plane · colour, clay, wireframe and normals render modes · labelled
+overall dimensions · studio, outdoor, room and raking light with exposure and a movable key light
+· subject-cropped covers and screenshots · STL and OBJ export · shareable views and iframe embeds
+that share scrolling with the host page · linked cameras for comparison · render on demand ·
+keyboard shortcuts (<kbd>M</kbd> measure, <kbd>N</kbd> note, <kbd>S</kbd> section, <kbd>D</kbd>
+dimensions, <kbd>1</kbd>–<kbd>4</kbd> render modes, <kbd>R</kbd> reset, <kbd>F</kbd> full screen,
+<kbd>?</kbd> all shortcuts).
 
-**Web app** · landing page · collection with search, tag filters, sorting and pagination · object
-page with Overview, Notes, Measure and Light panels · share dialog · upload with previews ·
-job timeline · capture guide · curator sign-in · light and dark themes · phone layouts ·
+**Web app** · landing page · collection with search (title, accession number, maker, material),
+tag filters, sorting, licence badges and pagination · object page with Overview, Notes, Measure,
+Light and Inspect panels · museum record (accession number, maker, date, place, material, credit
+line, provenance) · Creative Commons licences, downloads and a citation in text and BibTeX · text
+descriptions for screen readers · condition notes and printable reports · compare · kiosk mode ·
+curator dashboard · <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>K</kbd> command palette · upload with an
+in-browser photo check · job timeline · capture guide · light and dark themes · phone layouts ·
 keyboard and screen-reader support · reduced-motion support.
 
 **API** · FastAPI · session login with Argon2id and HttpOnly cookies · curator role · uploads
 checked by content with zip-slip and zip-bomb protection · background job queue with retry,
-cancel, logs and stage timings · annotations · shared views · thumbnails · ETag caching ·
-rate limits · security headers · SQLite for development, Postgres in production.
+cancel, logs and stage timings · museum record, licence and accessibility fields · condition
+notes with categories and severities · licence-aware downloads · visit counting · dashboard
+statistics · shared views · thumbnails · ETag caching · rate limits · security headers · additive
+schema upgrades on start · SQLite for development, Postgres in production.
 
 **Pipeline** · COLMAP feature extraction, matching, sparse and dense reconstruction and Poisson
 meshing (pycolmap, CUDA) · post-processing that turns the scan upright from the camera poses,
 crops it around the cameras' target, removes floating fragments, scales it from a known height,
-decimates it and writes a GLB · meshopt compression.
+decimates it and writes a GLB · meshopt compression · workspaces removed after a successful run.
 
 ## Quick start
 
@@ -138,10 +164,10 @@ More detail: [docs/architecture.md](docs/architecture.md).
 
 | Suite | Command | What it covers |
 |---|---|---|
-| API | `cd backend && uv run pytest` | 28 tests: auth, roles, rate limits, upload validation and zip slip, job lifecycle, search, annotations, shared views, caching, cross-site protection |
+| API | `cd backend && uv run pytest` | 41 tests: auth, roles, rate limits, upload validation and zip slip, job lifecycle and clean-up, search, museum record and licences, downloads, condition notes, visits, dashboard statistics, schema upgrades, shared views, caching, cross-site protection |
 | Pipeline | `cd photogrammetry-lib && uv run pytest` | 35 tests: storage hashing, orientation from cameras, crop, fragments, scale, decimation, normals, GLB writer, PLY reader, CLI |
-| Viewer and web app | `cd viewer && npm test` | 46 unit tests: loading, framing, ruler maths, sections, view validation, formatting, photo checks, job states |
-| End to end | `cd viewer && npm run e2e` | 12 browser tests against the real API and web app: browse, measure, share, sign-in rules, upload → job → annotate → edit → delete, phone layouts |
+| Viewer and web app | `cd viewer && npm test` | 62 unit tests: loading, framing, ruler maths, sections, dimensions, subject crops, linked cameras, model statistics, photo quality, citations, report order, light restore, formatting, job states |
+| End to end | `cd viewer && npm run e2e` | 23 browser tests against the real API and web app: browse, measure, share, sign-in rules, upload → job → annotate → edit → delete, inspect, raking light, museum record and citation, condition report, compare, kiosk, dashboard, command palette, photo check, scrolling over the 3D hero, phone layouts |
 | Types and build | `cd viewer && npm run check` | TypeScript for app, tests and e2e, then a production build |
 
 CI runs all of them on every pull request ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
@@ -160,7 +186,7 @@ Three containers: Postgres, the API with its worker, and nginx serving the web a
 
 ## Documentation
 
-- [Product and design plan](docs/product/design-plan.md): personas, UX research, five-product comparison, roadmap, pitch
+- [Product and design plan](docs/product/design-plan.md): personas, UX research, product comparisons, museum workflows, roadmap, pitch
 - [Architecture](docs/architecture.md): components, data model, job flow
 - [REST API](docs/api.md) (live docs at `/api/docs` when the API runs)
 - [Viewer API](viewer/README.md)

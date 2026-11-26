@@ -90,6 +90,10 @@ erDiagram
     json dimensions_mm
     int triangles
     bool is_demo
+    json record "accession number, maker, date, place, material, credit line, provenance"
+    string license "cc0 | cc-by | ... | all-rights-reserved"
+    text alt_text "for screen readers"
+    int visits
   }
   jobs {
     int id PK
@@ -108,6 +112,8 @@ erDiagram
     json normal
     string title
     text text
+    string category "note | detail | inscription | damage | repair"
+    string severity "damage only: negligible ... extreme"
   }
   saved_views {
     string id PK "8 random url-safe chars"
@@ -132,6 +138,19 @@ erDiagram
 - The section plane uses three's `ClippingGroup`, which works on both WebGPU and WebGL 2.
 - `environments.ts` generates the studio and outdoor lighting from tiny scenes baked with PMREM,
   so they need no download.
+- Render modes swap each mesh's material for a shared clay or normal material, and keep the
+  model's own materials to put back; wireframe adds helper meshes that share the geometry and are
+  skipped by picking, statistics and export.
+- `camera-move` fires on every frame the camera moves; the compare page mirrors it into the other
+  viewer with `mirrorView`, which keeps the angle and the zoom relative to each model's size.
+- `screenshot({ fit: 'subject' })` crops to the model's projected bounding box, for covers and
+  report images; `exportModel()` writes STL or OBJ from a shallow clone turned to Z up.
+
+## Schema upgrades
+
+`create_all` makes missing tables; `app/database/migrate.py` then adds columns that newer models
+have and an older database lacks (nullable, or with a server default). Anything beyond additive
+changes needs Alembic.
 
 ## Decisions
 

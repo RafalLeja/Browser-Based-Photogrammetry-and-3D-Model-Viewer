@@ -21,15 +21,25 @@ form `{"detail": "Readable message."}` (validation errors: `{"detail": [{"loc": 
 | GET | `/objects` | anyone | Query: `q`, `tag`, `sort` (`newest`, `oldest`, `title`), `status` (curators: `ready`, `processing`, `failed`, `all`), `page`, `page_size` (≤ 60). Visitors only see `ready` objects. |
 | GET | `/objects/tags` | anyone | Tags of published objects with counts |
 | GET | `/objects/{id}` | anyone (drafts: curator) | One object |
-| PATCH | `/objects/{id}` | curator | `title`, `description`, `tags`, `up`, `dimensions_mm` |
-| DELETE | `/objects/{id}` | curator | Deletes the object, its files, notes, jobs and shared views |
+| PATCH | `/objects/{id}` | curator | `title`, `description`, `tags`, `up`, `dimensions_mm`, `record`, `license`, `alt_text` (for the last three `null` clears the value) |
+| DELETE | `/objects/{id}` | curator | Deletes the object, its notes, jobs and shared views, and its files: photos, model, cover and COLMAP workspace |
 | GET | `/objects/{id}/model` | anyone (drafts: curator) | The model file; `ETag` + `Cache-Control: no-cache`, 304 when unchanged |
+| GET | `/objects/{id}/download` | visitors: open licences only; curators: always | The model file as an attachment named after the title |
+| POST | `/objects/{id}/visit` | anyone | Counts a visit (204). The same visitor counts once per object per 30 minutes; curators are not counted. |
 | GET | `/objects/{id}/thumbnail` | anyone | Cover image |
 | PUT | `/objects/{id}/thumbnail` | curator | Raw PNG, JPEG or WebP body, ≤ 3 MB |
 
-Object fields: `id, title, description, tags, status, model_url, model_format, up,
-dimensions_mm, triangles, file_size, thumbnail_url, is_demo, job_id, annotation_count,
-created_at, updated_at`.
+Object fields: `id, title, description, tags, record, license, downloadable, alt_text, visits,
+status, model_url, model_format, up, dimensions_mm, triangles, file_size, thumbnail_url, is_demo,
+job_id, annotation_count, created_at, updated_at`.
+
+- `record`: the museum record, any of `accession_number, maker, date, place, material,
+  credit_line, provenance` (free text; empty fields are dropped; unknown fields are refused).
+  Search (`q`) also looks in these fields.
+- `license`: `cc0, cc-by, cc-by-sa, cc-by-nc, cc-by-nc-nd, all-rights-reserved`, or `null` (not
+  stated). `downloadable` is true for the open (Creative Commons) licences.
+- `alt_text`: a text alternative for screen readers (WCAG 1.1.1), up to 1000 characters.
+- `model_url` changes only when the model file does, so editing details never reloads the model.
 
 ## Uploads
 
@@ -58,11 +68,13 @@ matching, sparse, dense, mesh, optimize, publish`. `stage_times` holds seconds p
 | Method | Path | Access | Description |
 |---|---|---|---|
 | GET | `/objects/{id}/annotations` | anyone | Notes in creation order |
-| POST | `/objects/{id}/annotations` | curator | `{position: [x,y,z], normal: [x,y,z], title (≤ 80), text (≤ 2000)}`; at most 200 per object |
-| PATCH | `/annotations/{id}` | curator | Any of the fields above |
+| POST | `/objects/{id}/annotations` | curator | `{position: [x,y,z], normal: [x,y,z], title (≤ 80), text (≤ 2000), category, severity}`; at most 200 per object |
+| PATCH | `/annotations/{id}` | curator | Any of the fields above (`severity: null` clears it) |
 | DELETE | `/annotations/{id}` | curator | 204 |
 
-Positions are in model space (metres when the model is true to scale).
+Positions are in model space (metres when the model is true to scale). `category` is one of
+`note` (default), `detail`, `inscription`, `damage`, `repair`. `severity` (`negligible, slight,
+moderate, marked, extreme`, the scale of museum condition reports) is kept for damage only.
 
 ## Shared views
 
@@ -72,6 +84,12 @@ Positions are in model space (metres when the model is true to scale).
 | GET | `/views/{id}` | anyone who can see the object | The stored state |
 
 The web app turns a view into `/objects/{id}?view={viewId}` and an embed URL `/embed/{id}?view={viewId}`.
+
+## Dashboard
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| GET | `/stats` | curator | Object counts by status, notes by category, shared views, visits, storage per folder, job counts, median reconstruction time, average seconds per stage, finished jobs per day for 30 days, the five most visited objects and the five newest jobs |
 
 ## Health
 

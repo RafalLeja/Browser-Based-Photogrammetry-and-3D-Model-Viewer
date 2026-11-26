@@ -37,7 +37,8 @@ On a workstation without containers, the simplest path is to run the API directl
   nginx can reach the API container. If another proxy terminates TLS in front of nginx, enable
   nginx's `real_ip` module for that proxy, or every visitor shares one limit.
 - Choose a strong `CURATOR_PASSWORD` and `DB_PASSWORD`; never commit them.
-- Add Alembic migrations before changing the schema on a database with real data.
+- New columns are added to an existing database on start (`app/database/migrate.py`). Renames,
+  type changes and removals need real migrations: add Alembic before making one of those.
 
 ## Backups
 
