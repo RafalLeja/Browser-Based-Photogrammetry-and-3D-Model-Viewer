@@ -1,81 +1,80 @@
-
-from pathlib import Path
+from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from sqlalchemy.orm import Session
-from typing import Annotated
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
-from app.database.session import get_db
-from app.models import Job
+from app.api.deps import Curator, Db, SettingsDep
+from app.api.serialize import job_out, object_out
+from app.models import CollectionObject, Job
+from app.schemas.object import clean_text
+from app.services.photos import Limits, PhotoError, PhotoWriter
 
-router = APIRouter(
-    prefix="/uploads",
-    tags=["uploads"]
-)
-
-# Katalog przechowujący przesłane zdjęcia
-BACKEND_ROOT = Path(__file__).resolve().parents[3]
-UPLOADS_DIRECTORY = BACKEND_ROOT / "storage" / "uploads"
+router = APIRouter(prefix="/uploads", tags=["Uploads"])
 
 
-@router.post("/")
-async def upload_photos(
-    files: Annotated[list[UploadFile], File()],
-    db: Session = Depends(get_db)
-):
-    # Tworzymy unikalny katalog dla danego uploadu
-    upload_id = str(uuid4())
-    upload_directory = UPLOADS_DIRECTORY / upload_id
-    upload_directory.mkdir(parents=True, exist_ok=True)
+@router.post("", status_code=201)
+def upload_photos(
+    request: Request,
+    db: Db,
+    settings: SettingsDep,
+    user: Curator,
+    title: Annotated[str, Form(min_length=1, max_length=120)],
+    files: Annotated[list[UploadFile], File(description="JPEG or PNG photos, or zip files of them")],
+    description: Annotated[str, Form(max_length=4000)] = "",
+    tags: Annotated[str, Form(max_length=400)] = "",
+    real_height_mm: Annotated[float | None, Form(gt=0, le=100_000)] = None,
+) -> dict:
+    """Stores the photos, creates the object and queues its reconstruction job.
 
-    saved_files = []
+    A plain `def`: FastAPI runs it in a thread, so copying large files does not block other requests.
+    """
+    if not request.app.state.upload_limiter.allow(str(user.id)):
+        raise HTTPException(status_code=429, detail="Upload limit reached. Try again in an hour.")
+    title = clean_text(title)
+    if not title:
+        raise HTTPException(status_code=422, detail="Give the object a title.")
 
-    for file in files:
-        if not file.filename:
-            raise HTTPException(
-                status_code=400,
-                detail="File must have a name"
-            )
-
-        extension = Path(file.filename).suffix.lower()
-
-        if extension not in [".jpg", ".jpeg", ".png"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file format: {file.filename}"
-            )
-
-        file_path = upload_directory / f"{uuid4()}{extension}"
-
-        content = await file.read()
-        if not content:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Empty file: {file.filename}"
-            )
-
-        file_path.write_bytes(content)
-        saved_files.append(file_path.name)
-
-        await file.close()
-
-    # Tworzymy zadanie w bazie danych
-    job = Job(
-        status="pending",
-        current_stage="uploaded",
-        input_path=str(upload_directory)
+    upload_id = uuid4().hex
+    writer = PhotoWriter(
+        settings.storage_dir / "uploads" / upload_id,
+        Limits(settings.min_photos, settings.max_photos, settings.max_photo_bytes, settings.max_upload_bytes),
     )
+    try:
+        for upload in files:
+            name = clean_text(upload.filename or "photo")[:120]
+            if name.lower().endswith(".zip"):
+                writer.add_zip(upload.file, name)
+            else:
+                writer.add_stream(upload.file, name)
+            upload.file.close()
+        count = writer.finish()
+    except PhotoError as error:
+        writer.discard()
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
+    tag_list = [clean_text(t).lower()[:32] for t in tags.split(",") if clean_text(t)][:12]
+    obj = CollectionObject(
+        title=title,
+        description=clean_text(description),
+        tags=list(dict.fromkeys(tag_list)),
+        status="processing",
+        created_by=user.id,
+    )
+    db.add(obj)
+    db.flush()
+    job = Job(
+        object_id=obj.id,
+        status="queued",
+        input_path=str(writer.dest),
+        photo_count=count,
+        options={"real_height_mm": real_height_mm} if real_height_mm else {},
+    )
     db.add(job)
     db.commit()
-    db.refresh(job)
-
+    if request.app.state.worker:
+        request.app.state.worker.notify()
     return {
-        "message": "Files uploaded successfully",
-        "upload_id": upload_id,
-        "job_id": job.id,
-        "status": job.status,
-        "files_count": len(saved_files),
-        "filenames": saved_files
+        "object": object_out(db, obj).model_dump(),
+        "job": job_out(db, job).model_dump(),
+        "skipped_files": writer.skipped,
     }
