@@ -11,11 +11,24 @@ export interface User {
   role: string;
 }
 
+export type LicenseKey = 'cc0' | 'cc-by' | 'cc-by-sa' | 'cc-by-nc' | 'cc-by-nc-nd' | 'all-rights-reserved';
+export type RecordField = 'accession_number' | 'maker' | 'date' | 'place' | 'material' | 'credit_line' | 'provenance';
+export type ObjectRecord = Partial<Record<RecordField, string>>;
+export type NoteCategory = 'note' | 'detail' | 'inscription' | 'damage' | 'repair';
+export type Severity = 'negligible' | 'slight' | 'moderate' | 'marked' | 'extreme';
+
 export interface CollectionObject {
   id: number;
   title: string;
   description: string;
   tags: string[];
+  record: ObjectRecord;
+  license: LicenseKey | null;
+  /** Visitors may download the model: it has an open licence. */
+  downloadable: boolean;
+  /** Text alternative for screen readers. */
+  alt_text: string | null;
+  visits: number;
   status: 'processing' | 'ready' | 'failed';
   model_url: string | null;
   model_format: 'gltf' | 'ply';
@@ -45,6 +58,8 @@ export interface Annotation {
   normal: Vec3;
   title: string;
   text: string;
+  category: NoteCategory;
+  severity: Severity | null;
   author: string | null;
   created_at: string;
   updated_at: string;
@@ -88,6 +103,24 @@ export interface Job {
   finished_at: string | null;
   log: string | null;
 }
+
+export interface Stats {
+  objects: { total: number; ready: number; processing: number; failed: number; demo: number };
+  notes: number;
+  notes_by_category: Partial<Record<NoteCategory, number>>;
+  shared_views: number;
+  visits: number;
+  storage_bytes: { uploads: number; models: number; thumbnails: number; total: number };
+  jobs: { total: number; done: number; failed: number; cancelled: number; active: number };
+  median_job_seconds: number | null;
+  stage_seconds: Record<string, number>;
+  jobs_by_day: { date: string; done: number; failed: number }[];
+  top_objects: { id: number; title: string; visits: number; thumbnail_url: string | null }[];
+  recent_jobs: Job[];
+}
+
+export type ObjectPatch = Partial<Pick<CollectionObject, 'title' | 'description' | 'tags' | 'dimensions_mm' | 'record' | 'license' | 'alt_text'>>;
+export type NoteFields = Pick<Annotation, 'title' | 'text' | 'category' | 'severity'>;
 
 export interface Stage {
   key: string;
@@ -164,17 +197,19 @@ export const api = {
   },
   tags: () => request<{ tag: string; count: number }[]>('/objects/tags'),
   object: (id: number) => request<CollectionObject>(`/objects/${id}`),
-  updateObject: (id: number, patch: Partial<Pick<CollectionObject, 'title' | 'description' | 'tags' | 'dimensions_mm'>>) =>
-    request<CollectionObject>(`/objects/${id}`, json('PATCH', patch)),
+  updateObject: (id: number, patch: ObjectPatch) => request<CollectionObject>(`/objects/${id}`, json('PATCH', patch)),
+  /** Counts a visitor's visit (the server ignores curators and repeat visits). */
+  visit: (id: number) => request<void>(`/objects/${id}/visit`, { method: 'POST' }),
+  downloadUrl: (id: number) => `${API}/objects/${id}/download`,
+  stats: () => request<Stats>('/stats'),
   deleteObject: (id: number) => request<void>(`/objects/${id}`, { method: 'DELETE' }),
   setThumbnail: (id: number, image: Blob) =>
     request<CollectionObject>(`/objects/${id}/thumbnail`, { method: 'PUT', body: image, headers: { 'Content-Type': image.type } }),
 
   annotations: (objectId: number) => request<Annotation[]>(`/objects/${objectId}/annotations`),
-  createAnnotation: (objectId: number, body: Pick<Annotation, 'position' | 'normal' | 'title' | 'text'>) =>
+  createAnnotation: (objectId: number, body: Pick<Annotation, 'position' | 'normal'> & NoteFields) =>
     request<Annotation>(`/objects/${objectId}/annotations`, json('POST', body)),
-  updateAnnotation: (id: number, body: Partial<Pick<Annotation, 'title' | 'text'>>) =>
-    request<Annotation>(`/annotations/${id}`, json('PATCH', body)),
+  updateAnnotation: (id: number, body: Partial<NoteFields>) => request<Annotation>(`/annotations/${id}`, json('PATCH', body)),
   deleteAnnotation: (id: number) => request<void>(`/annotations/${id}`, { method: 'DELETE' }),
 
   createView: (objectId: number, state: SharedViewState) => request<SharedView>(`/objects/${objectId}/views`, json('POST', state)),

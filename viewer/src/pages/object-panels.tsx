@@ -1,83 +1,48 @@
 // The side panels of the object page. Each one receives plain data and callbacks; the page owns
 // the viewer and the API calls.
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import type { Annotation, CollectionObject, EnvironmentName } from '../api';
-import { DEFAULT_LIGHT, type LightState } from '../lib/light';
+import type { Annotation, CollectionObject, EnvironmentName, LicenseKey, NoteCategory, NoteFields, ObjectPatch, Severity } from '../api';
 import { formatLength } from '../index';
-import type { Measurement, ModelInfo, RendererBackend } from '../index';
-import { Icon } from '../components/icon';
-import { Notice } from '../components/ui';
+import type { Measurement, ModelInfo, RenderMode, RendererBackend } from '../index';
+import { Icon, type IconName } from '../components/icon';
+import { Dialog, Notice } from '../components/ui';
 import { formatBytes, formatCount, formatDimensions, formatRelative } from '../lib/format';
+import { DEFAULT_LIGHT, RAKING_LIGHT, type LightState } from '../lib/light';
+import { LICENSES, NOTE_CATEGORIES, RECORD_FIELDS, SEVERITIES, categoryLabel, severityLabel } from '../lib/museum';
+
+function Section({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
+  return (
+    <section className="group">
+      <div className="row row-between">
+        <h3 className="group-title">{title}</h3>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
 
 // ---------- Overview ----------
+
+export type ExportFormat = 'stl' | 'obj';
 
 export function OverviewPanel(props: {
   object: CollectionObject;
   info: ModelInfo | null;
-  backend: RendererBackend | null;
   curator: boolean;
-  onSave: (patch: { title: string; description: string; tags: string[] }) => Promise<void>;
+  exporting: ExportFormat | null;
+  onEdit: () => void;
   onCover: () => void;
   onDelete: () => void;
+  onCite: () => void;
+  onExport: (format: ExportFormat) => void;
 }) {
   const { object, info, curator } = props;
-  const [editing, setEditing] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const record = RECORD_FIELDS.filter((field) => object.record[field.key]);
+  const license = object.license ? LICENSES[object.license] : null;
+  const canDownload = object.downloadable || curator;
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    setBusy(true);
-    setError('');
-    try {
-      await props.onSave({
-        title: String(data.get('title') ?? ''),
-        description: String(data.get('description') ?? ''),
-        tags: String(data.get('tags') ?? '')
-          .split(',')
-          .map((t) => t.trim())
-          .filter(Boolean),
-      });
-      setEditing(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (editing) {
-    return (
-      <form className="group" onSubmit={submit}>
-        <div className="field">
-          <label htmlFor="edit-title">Title</label>
-          <input id="edit-title" name="title" className="input" defaultValue={object.title} required maxLength={120} />
-        </div>
-        <div className="field">
-          <label htmlFor="edit-description">Description</label>
-          <textarea id="edit-description" name="description" className="textarea" defaultValue={object.description} maxLength={4000} rows={6} />
-        </div>
-        <div className="field">
-          <label htmlFor="edit-tags">Tags</label>
-          <input id="edit-tags" name="tags" className="input" defaultValue={object.tags.join(', ')} />
-          <span className="hint">Separate tags with commas.</span>
-        </div>
-        {error ? <Notice kind="danger">{error}</Notice> : null}
-        <div className="row">
-          <button type="submit" className="btn btn-sm" disabled={busy}>
-            Save changes
-          </button>
-          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setEditing(false)}>
-            Cancel
-          </button>
-        </div>
-      </form>
-    );
-  }
-
-  const size = info ? info.size : null;
   return (
     <>
       {object.is_demo ? (
@@ -95,6 +60,70 @@ export function OverviewPanel(props: {
           ))}
         </div>
       ) : null}
+
+      {record.length || curator ? (
+        <Section
+          title="Object record"
+          action={
+            curator ? (
+              <button type="button" className="link-button" onClick={props.onEdit}>
+                {record.length ? 'Edit' : 'Add'}
+              </button>
+            ) : undefined
+          }
+        >
+          {record.length ? (
+            <dl className="record">
+              {record.map((field) => (
+                <div key={field.key}>
+                  <dt>{field.label}</dt>
+                  <dd>{object.record[field.key]}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p className="muted small">No museum record yet: accession number, maker, date, material and credit line.</p>
+          )}
+        </Section>
+      ) : null}
+
+      <Section title="Rights and reuse">
+        <div className="rights">
+          {license ? (
+            license.url ? (
+              <a className="license" href={license.url} target="_blank" rel="noopener noreferrer license">
+                <Icon name="badge" /> {license.label}
+              </a>
+            ) : (
+              <span className="license">
+                <Icon name="lock" /> {license.label}
+              </span>
+            )
+          ) : (
+            <span className="muted small">Rights not stated yet{curator ? ': choose a licence in Edit details.' : '.'}</span>
+          )}
+          <div className="row">
+            <button type="button" className="btn btn-sm btn-ghost" onClick={props.onCite}>
+              <Icon name="quote" /> Cite
+            </button>
+            {canDownload && object.model_url ? (
+              <>
+                <a className="btn btn-sm btn-ghost" href={`/api/v1/objects/${object.id}/download`} download>
+                  <Icon name="download" /> {object.model_format === 'ply' ? 'PLY' : 'GLB'}
+                </a>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => props.onExport('stl')} disabled={!info || props.exporting !== null}>
+                  <Icon name="cube" /> {props.exporting === 'stl' ? 'Preparing…' : 'STL for 3D printing'}
+                </button>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => props.onExport('obj')} disabled={!info || props.exporting !== null}>
+                  {props.exporting === 'obj' ? 'Preparing…' : 'OBJ'}
+                </button>
+              </>
+            ) : null}
+          </div>
+          {canDownload && !object.downloadable ? <p className="muted small">Only curators see downloads until the object has an open licence.</p> : null}
+        </div>
+      </Section>
+
       <dl className="facts">
         <div className="fact">
           <dt>Real size</dt>
@@ -113,27 +142,27 @@ export function OverviewPanel(props: {
           <dd>{object.model_format === 'ply' ? 'PLY (raw)' : 'glTF binary'}</dd>
         </div>
         <div className="fact">
-          <dt>Bounding box</dt>
-          <dd>{size ? size.map((v) => v.toFixed(2)).join(' × ') : '–'}</dd>
-        </div>
-        <div className="fact">
-          <dt>Renderer</dt>
-          <dd>{props.backend === 'webgpu' ? 'WebGPU' : props.backend === 'webgl2' ? 'WebGL 2' : '–'}</dd>
-        </div>
-        <div className="fact">
           <dt>Added</dt>
           <dd>{formatRelative(object.created_at)}</dd>
         </div>
         <div className="fact">
-          <dt>Notes</dt>
-          <dd>{object.annotation_count}</dd>
+          <dt>{curator ? 'Visits' : 'Notes'}</dt>
+          <dd>{curator ? formatCount(object.visits) : object.annotation_count}</dd>
         </div>
       </dl>
+
       {curator ? (
-        <div className="group">
-          <h3 className="group-title">Curator</h3>
+        <Section title="Curator">
+          {!object.alt_text ? (
+            <Notice>
+              Add a text description so screen-reader users know what the model shows.{' '}
+              <button type="button" className="link-button" onClick={props.onEdit}>
+                Add one
+              </button>
+            </Notice>
+          ) : null}
           <div className="row">
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setEditing(true)}>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={props.onEdit}>
               <Icon name="pencil" /> Edit details
             </button>
             <button type="button" className="btn btn-sm btn-ghost" onClick={props.onCover}>
@@ -148,9 +177,112 @@ export function OverviewPanel(props: {
               <Icon name="trash" /> Delete
             </button>
           </div>
-        </div>
+        </Section>
       ) : null}
     </>
+  );
+}
+
+/** Edits the title, the museum record, the licence and the text description in one dialog. */
+export function EditObjectDialog(props: { object: CollectionObject; open: boolean; onClose: () => void; onSave: (patch: ObjectPatch) => Promise<void> }) {
+  const { object } = props;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const text = (name: string) => String(data.get(name) ?? '').trim();
+    const license = text('license') as LicenseKey | '';
+    setBusy(true);
+    setError('');
+    try {
+      await props.onSave({
+        title: text('title'),
+        description: text('description'),
+        tags: text('tags')
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean),
+        record: Object.fromEntries(RECORD_FIELDS.map((field) => [field.key, text(`record-${field.key}`)])),
+        license: license || null,
+        alt_text: text('alt_text') || null,
+      });
+      props.onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={props.open} onClose={props.onClose} label="Edit details" wide>
+      <form className="edit-form" onSubmit={submit}>
+        <h2>Edit details</h2>
+        <fieldset>
+          <legend>Basics</legend>
+          <div className="field">
+            <label htmlFor="edit-title">Title</label>
+            <input id="edit-title" name="title" className="input" defaultValue={object.title} required maxLength={120} />
+          </div>
+          <div className="field">
+            <label htmlFor="edit-description">Description</label>
+            <textarea id="edit-description" name="description" className="textarea" defaultValue={object.description} maxLength={4000} rows={4} />
+          </div>
+          <div className="field">
+            <label htmlFor="edit-tags">Tags</label>
+            <input id="edit-tags" name="tags" className="input" defaultValue={object.tags.join(', ')} />
+            <span className="hint">Separate tags with commas.</span>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Museum record</legend>
+          <div className="field-grid">
+            {RECORD_FIELDS.map((field) => (
+              <div key={field.key} className={`field ${field.multiline ? 'field-wide' : ''}`}>
+                <label htmlFor={`record-${field.key}`}>{field.label}</label>
+                {field.multiline ? (
+                  <textarea id={`record-${field.key}`} name={`record-${field.key}`} className="textarea" rows={3} maxLength={2000} defaultValue={object.record[field.key] ?? ''} />
+                ) : (
+                  <input id={`record-${field.key}`} name={`record-${field.key}`} className="input" maxLength={300} defaultValue={object.record[field.key] ?? ''} />
+                )}
+                {field.hint ? <span className="hint">{field.hint}</span> : null}
+              </div>
+            ))}
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Rights and access</legend>
+          <div className="field">
+            <label htmlFor="edit-license">Licence</label>
+            <select id="edit-license" name="license" className="select" defaultValue={object.license ?? ''}>
+              <option value="">Not stated</option>
+              {(Object.keys(LICENSES) as LicenseKey[]).map((key) => (
+                <option key={key} value={key}>
+                  {LICENSES[key].label}
+                </option>
+              ))}
+            </select>
+            <span className="hint">With an open licence, visitors can download the model as GLB, STL or OBJ.</span>
+          </div>
+          <div className="field">
+            <label htmlFor="edit-alt">Text description</label>
+            <textarea id="edit-alt" name="alt_text" className="textarea" rows={2} maxLength={1000} defaultValue={object.alt_text ?? ''} />
+            <span className="hint">One or two sentences on what the model shows, read out to screen-reader users.</span>
+          </div>
+        </fieldset>
+        {error ? <Notice kind="danger">{error}</Notice> : null}
+        <div className="dialog-actions">
+          <button type="button" className="btn btn-ghost" onClick={props.onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="btn" disabled={busy}>
+            Save changes
+          </button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
 
@@ -161,6 +293,59 @@ export interface DraftPin {
   normal: [number, number, number];
 }
 
+export type NoteFilter = NoteCategory | 'all';
+
+function NoteFieldset({ note, idPrefix }: { note?: Pick<Annotation, 'title' | 'text' | 'category' | 'severity'>; idPrefix: string }) {
+  const [category, setCategory] = useState<NoteCategory>(note?.category ?? 'note');
+  return (
+    <>
+      <div className="field">
+        <label htmlFor={`${idPrefix}-title`}>Title</label>
+        <input id={`${idPrefix}-title`} name="title" className="input" defaultValue={note?.title} required maxLength={80} autoFocus />
+      </div>
+      <div className="row" style={{ alignItems: 'flex-end' }}>
+        <div className="field" style={{ flex: 1 }}>
+          <label htmlFor={`${idPrefix}-category`}>Category</label>
+          <select id={`${idPrefix}-category`} name="category" className="select" value={category} onChange={(event) => setCategory(event.target.value as NoteCategory)}>
+            {NOTE_CATEGORIES.map((c) => (
+              <option key={c.key} value={c.key}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {category === 'damage' ? (
+          <div className="field" style={{ flex: 1 }}>
+            <label htmlFor={`${idPrefix}-severity`}>Severity</label>
+            <select id={`${idPrefix}-severity`} name="severity" className="select" defaultValue={note?.severity ?? 'slight'}>
+              {SEVERITIES.map((s) => (
+                <option key={s.key} value={s.key}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+      </div>
+      <div className="field">
+        <label htmlFor={`${idPrefix}-text`}>Note</label>
+        <textarea id={`${idPrefix}-text`} name="text" className="textarea" defaultValue={note?.text} maxLength={2000} rows={3} />
+      </div>
+    </>
+  );
+}
+
+function readNote(form: HTMLFormElement): NoteFields {
+  const data = new FormData(form);
+  const category = String(data.get('category') ?? 'note') as NoteCategory;
+  return {
+    title: String(data.get('title') ?? ''),
+    text: String(data.get('text') ?? ''),
+    category,
+    severity: category === 'damage' ? (String(data.get('severity') ?? 'slight') as Severity) : null,
+  };
+}
+
 export function NotesPanel(props: {
   annotations: Annotation[];
   activeId: string | null;
@@ -168,32 +353,38 @@ export function NotesPanel(props: {
   placing: boolean;
   draft: DraftPin | null;
   touring: boolean;
+  filter: NoteFilter;
+  onFilter: (filter: NoteFilter) => void;
   onSelect: (id: string) => void;
   onStartPlacing: () => void;
-  onSaveDraft: (title: string, text: string) => Promise<void>;
+  onSaveDraft: (note: NoteFields) => Promise<void>;
   onCancelDraft: () => void;
-  onUpdate: (id: number, title: string, text: string) => Promise<void>;
+  onUpdate: (id: number, note: NoteFields) => Promise<void>;
   onDelete: (id: number) => void;
   onTour: () => void;
+  onReport: () => void;
 }) {
-  const { annotations, activeId, curator, draft } = props;
+  const { annotations, activeId, curator, draft, filter } = props;
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const listRef = useRef<HTMLOListElement>(null);
+  const counts = new Map<NoteCategory, number>();
+  for (const note of annotations) counts.set(note.category, (counts.get(note.category) ?? 0) + 1);
+  const shown = filter === 'all' ? annotations : annotations.filter((note) => note.category === filter);
 
   useEffect(() => {
     if (!activeId) return;
     listRef.current?.querySelector(`[data-id="${CSS.escape(activeId)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [activeId]);
 
-  async function run(event: FormEvent<HTMLFormElement>, action: (title: string, text: string) => Promise<void>) {
+  async function run(event: FormEvent<HTMLFormElement>, action: (note: NoteFields) => Promise<void>) {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
+    const note = readNote(event.currentTarget);
     setBusy(true);
     setError('');
     try {
-      await action(String(data.get('title') ?? ''), String(data.get('text') ?? ''));
+      await action(note);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -221,19 +412,25 @@ export function NotesPanel(props: {
         </div>
       </div>
 
+      {counts.size > 1 ? (
+        <div className="chips" role="group" aria-label="Show notes of one category">
+          <button type="button" className="chip" aria-pressed={filter === 'all'} onClick={() => props.onFilter('all')}>
+            All <span className="count">{annotations.length}</span>
+          </button>
+          {NOTE_CATEGORIES.filter((c) => counts.has(c.key)).map((c) => (
+            <button key={c.key} type="button" className="chip" aria-pressed={filter === c.key} onClick={() => props.onFilter(filter === c.key ? 'all' : c.key)}>
+              <span className="kind-dot" data-kind={c.key} /> {c.plural} <span className="count">{counts.get(c.key)}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {props.placing && !draft ? <Notice>Click the model where the note belongs. Press Escape to stop.</Notice> : null}
 
       {draft ? (
         <form className="card-panel" style={{ padding: 20, gap: 14 }} onSubmit={(event) => run(event, props.onSaveDraft)}>
           <strong>New note</strong>
-          <div className="field">
-            <label htmlFor="note-title">Title</label>
-            <input id="note-title" name="title" className="input" required maxLength={80} autoFocus />
-          </div>
-          <div className="field">
-            <label htmlFor="note-text">Note</label>
-            <textarea id="note-text" name="text" className="textarea" maxLength={2000} rows={4} />
-          </div>
+          <NoteFieldset idPrefix="note" />
           {error ? <Notice kind="danger">{error}</Notice> : null}
           <div className="row">
             <button type="submit" className="btn btn-sm" disabled={busy}>
@@ -247,22 +444,22 @@ export function NotesPanel(props: {
       ) : null}
 
       <ol className="list" ref={listRef}>
-        {annotations.map((annotation, index) => {
+        {shown.map((annotation) => {
           const id = String(annotation.id);
+          const number = annotations.indexOf(annotation) + 1;
           if (editingId === annotation.id) {
             return (
               <li key={id} className="list-item" style={{ display: 'block' }}>
                 <form
                   className="group"
                   onSubmit={(event) =>
-                    run(event, async (title, text) => {
-                      await props.onUpdate(annotation.id, title, text);
+                    run(event, async (note) => {
+                      await props.onUpdate(annotation.id, note);
                       setEditingId(null);
                     })
                   }
                 >
-                  <input name="title" className="input" defaultValue={annotation.title} required maxLength={80} aria-label="Title" />
-                  <textarea name="text" className="textarea" defaultValue={annotation.text} maxLength={2000} rows={3} aria-label="Note" />
+                  <NoteFieldset idPrefix={`edit-note-${id}`} note={annotation} />
                   {error ? <Notice kind="danger">{error}</Notice> : null}
                   <div className="row">
                     <button type="submit" className="btn btn-sm" disabled={busy}>
@@ -278,8 +475,14 @@ export function NotesPanel(props: {
           }
           return (
             <li key={id} className="list-item" data-id={id} data-active={activeId === id || undefined}>
-              <span className="num">{index + 1}</span>
+              <span className="num" data-kind={annotation.category}>
+                {number}
+              </span>
               <button type="button" className="list-main" onClick={() => props.onSelect(id)}>
+                <span className="note-kind" data-kind={annotation.category}>
+                  {categoryLabel(annotation.category)}
+                  {annotation.severity ? ` · ${severityLabel(annotation.severity)}` : ''}
+                </span>
                 <h4>{annotation.title}</h4>
                 {annotation.text ? <p>{annotation.text}</p> : null}
                 <span className="muted" style={{ fontSize: 12 }}>
@@ -288,10 +491,10 @@ export function NotesPanel(props: {
               </button>
               {curator ? (
                 <div className="row" style={{ gap: 0 }}>
-                  <button type="button" className="icon-btn" style={{ width: 34, height: 34 }} aria-label={`Edit note ${index + 1}`} onClick={() => setEditingId(annotation.id)}>
+                  <button type="button" className="icon-btn" style={{ width: 34, height: 34 }} aria-label={`Edit note ${number}`} onClick={() => setEditingId(annotation.id)}>
                     <Icon name="pencil" />
                   </button>
-                  <button type="button" className="icon-btn" style={{ width: 34, height: 34 }} aria-label={`Delete note ${index + 1}`} onClick={() => props.onDelete(annotation.id)}>
+                  <button type="button" className="icon-btn" style={{ width: 34, height: 34 }} aria-label={`Delete note ${number}`} onClick={() => props.onDelete(annotation.id)}>
                     <Icon name="trash" />
                   </button>
                 </div>
@@ -302,6 +505,12 @@ export function NotesPanel(props: {
           );
         })}
       </ol>
+
+      {annotations.length ? (
+        <button type="button" className="btn btn-sm btn-ghost" style={{ justifySelf: 'start' }} onClick={props.onReport}>
+          <Icon name="file" /> Condition report
+        </button>
+      ) : null}
     </>
   );
 }
@@ -390,13 +599,33 @@ function Slider(props: { id: string; label: string; value: number; min: number; 
 export function LightPanel(props: {
   light: LightState;
   autoRotate: boolean;
+  sweeping: boolean;
   onChange: (light: LightState) => void;
   onAutoRotate: (on: boolean) => void;
+  onSweep: () => void;
 }) {
   const { light } = props;
   const set = (patch: Partial<LightState>) => props.onChange({ ...light, ...patch });
+  const raking = light.environment === 'none' && light.elevation <= 15;
   return (
     <>
+      <div className="presets" role="group" aria-label="Lighting presets">
+        <button type="button" className="preset" aria-pressed={!raking && light.environment === 'studio'} onClick={() => props.onChange({ ...DEFAULT_LIGHT, azimuth: light.azimuth })}>
+          <Icon name="sun" />
+          <strong>Studio</strong>
+          <span>Soft, even light</span>
+        </button>
+        <button type="button" className="preset" aria-pressed={raking} onClick={() => props.onChange({ ...light, ...RAKING_LIGHT })}>
+          <Icon name="raking" />
+          <strong>Raking light</strong>
+          <span>Low and from one side: reveals relief, tool marks and cracks</span>
+        </button>
+      </div>
+      {raking ? (
+        <button type="button" className="btn btn-sm btn-ghost" style={{ justifySelf: 'start' }} onClick={props.onSweep} aria-pressed={props.sweeping}>
+          <Icon name={props.sweeping ? 'pause' : 'refresh'} /> {props.sweeping ? 'Stop sweep' : 'Sweep the light around'}
+        </button>
+      ) : null}
       <div className="group">
         <h3 className="group-title">Environment</h3>
         <div className="segmented" role="group" aria-label="Environment">
@@ -430,6 +659,96 @@ export function LightPanel(props: {
           <Icon name="reset" /> Reset lighting
         </button>
       </div>
+    </>
+  );
+}
+
+// ---------- Inspect ----------
+
+export const RENDER_MODES: { mode: RenderMode; label: string; icon: IconName; hint: string }[] = [
+  { mode: 'standard', label: 'Colour', icon: 'image', hint: 'The photographed colours and materials' },
+  { mode: 'clay', label: 'Clay', icon: 'sphere', hint: 'Matte grey: the shape alone, without colour' },
+  { mode: 'wireframe', label: 'Wireframe', icon: 'grid', hint: 'The triangles of the mesh' },
+  { mode: 'normals', label: 'Normals', icon: 'compass', hint: 'Coloured by the direction each surface faces' },
+];
+
+export function InspectPanel(props: {
+  object: CollectionObject;
+  info: ModelInfo | null;
+  backend: RendererBackend | null;
+  renderMode: RenderMode;
+  dimensions: boolean;
+  trueScale: boolean;
+  onRenderMode: (mode: RenderMode) => void;
+  onDimensions: (on: boolean) => void;
+}) {
+  const { info } = props;
+  const stats = info?.stats;
+  const points = Boolean(stats && stats.meshes === 0 && stats.points > 0);
+  return (
+    <>
+      <Section title="Surface">
+        <div className="mode-grid" role="group" aria-label="Render mode">
+          {RENDER_MODES.map((item, index) => (
+            <button
+              key={item.mode}
+              type="button"
+              className="mode"
+              aria-pressed={props.renderMode === item.mode}
+              onClick={() => props.onRenderMode(item.mode)}
+              disabled={!info || points}
+              title={`${item.hint} (${index + 1})`}
+            >
+              <Icon name={item.icon} />
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <p className="muted small">{points ? 'A point cloud is always drawn with its own colours.' : RENDER_MODES.find((m) => m.mode === props.renderMode)?.hint}</p>
+        <label className="switch">
+          <input type="checkbox" checked={props.dimensions} onChange={(event) => props.onDimensions(event.target.checked)} disabled={!info} />
+          Show overall dimensions
+        </label>
+      </Section>
+      <Section title="Model">
+        <dl className="facts">
+          <div className="fact">
+            <dt>Triangles</dt>
+            <dd>{formatCount(info?.triangles)}</dd>
+          </div>
+          <div className="fact">
+            <dt>Vertices</dt>
+            <dd>{formatCount(stats?.vertices)}</dd>
+          </div>
+          <div className="fact">
+            <dt>Meshes</dt>
+            <dd>{stats ? stats.meshes + stats.points : '–'}</dd>
+          </div>
+          <div className="fact">
+            <dt>Materials</dt>
+            <dd>{stats?.materials ?? '–'}</dd>
+          </div>
+          <div className="fact">
+            <dt>Textures</dt>
+            <dd>{stats ? (stats.textures ? `${stats.textures} · up to ${stats.maxTextureSize} px` : 'None') : '–'}</dd>
+          </div>
+          <div className="fact">
+            <dt>Colour</dt>
+            <dd>{stats ? (stats.vertexColors ? 'Per vertex' : stats.textures ? 'Textures' : 'Material') : '–'}</dd>
+          </div>
+          <div className="fact">
+            <dt>Bounding box</dt>
+            <dd>{info ? info.size.map((v) => formatLength(v, props.trueScale)).join(' × ') : '–'}</dd>
+          </div>
+          <div className="fact">
+            <dt>Renderer</dt>
+            <dd>{props.backend === 'webgpu' ? 'WebGPU' : props.backend === 'webgl2' ? 'WebGL 2' : '–'}</dd>
+          </div>
+        </dl>
+        <p className="muted small">
+          File: {formatBytes(props.object.file_size)}, {props.object.model_format === 'ply' ? 'PLY' : 'glTF binary'}.
+        </p>
+      </Section>
     </>
   );
 }

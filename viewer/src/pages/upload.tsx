@@ -6,6 +6,7 @@ import { api, uploadPhotos } from '../api';
 import { Icon } from '../components/icon';
 import { Notice, useAsync, useDocumentTitle } from '../components/ui';
 import { formatBytes } from '../lib/format';
+import { ISSUE_LABELS, assessPhotos, checkPhoto, type PhotoIssue, type PhotoMeasure } from '../lib/photo-quality';
 import { DEFAULT_LIMITS, coverageLevel, isZip, readyToUpload, selectPhotos } from '../lib/photos';
 
 const PREVIEW_LIMIT = 48;
@@ -17,7 +18,7 @@ const COVERAGE: Record<number, { label: string; color: string }> = {
   3: { label: 'Great coverage', color: 'var(--success)' },
 };
 
-function Preview({ file, onRemove }: { file: File; onRemove: () => void }) {
+function Preview({ file, issues, onRemove }: { file: File; issues?: PhotoIssue[]; onRemove: () => void }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     if (isZip(file)) return;
@@ -28,6 +29,12 @@ function Preview({ file, onRemove }: { file: File; onRemove: () => void }) {
   return (
     <div className="thumb">
       {url ? <img src={url} alt="" loading="lazy" decoding="async" /> : <div className="thumb-file">{file.name}</div>}
+      {issues?.length ? (
+        <span className="thumb-flag" title={issues.map((issue) => ISSUE_LABELS[issue]).join(', ')}>
+          {ISSUE_LABELS[issues[0]]}
+          {issues.length > 1 ? ` +${issues.length - 1}` : ''}
+        </span>
+      ) : null}
       <button type="button" aria-label={`Remove ${file.name}`} onClick={onRemove}>
         <Icon name="x" />
       </button>
@@ -45,6 +52,8 @@ export function Upload() {
   const [dragging, setDragging] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [measures, setMeasures] = useState<Map<File, PhotoMeasure | null>>(new Map());
+  const [onlyFlagged, setOnlyFlagged] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
@@ -54,6 +63,35 @@ export function Upload() {
   const level = coverageLevel(selection.photoCount + (selection.zipCount ? 30 : 0));
 
   useEffect(() => () => abortRef.current?.(), []); // Leaving the page cancels an upload in flight.
+
+  // Every new photo is checked in the background, two at a time; decoding happens off the main thread.
+  useEffect(() => {
+    const queue = files.filter((file) => !isZip(file) && !measures.has(file));
+    if (queue.length === 0) return;
+    let cancelled = false;
+    const worker = async () => {
+      for (let file = queue.shift(); file && !cancelled; file = queue.shift()) {
+        const measure = await checkPhoto(file).catch(() => null);
+        if (!cancelled) setMeasures((current) => new Map(current).set(file, measure));
+      }
+    };
+    void Promise.all([worker(), worker()]);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run for new files only; measures grows as results arrive
+  }, [files]);
+
+  const photos = files.filter((file) => !isZip(file));
+  const measured = photos.filter((file) => measures.get(file));
+  const issueList = assessPhotos(measured.map((file) => measures.get(file)!));
+  const issues = new Map(measured.map((file, index) => [file, issueList[index]]));
+  const flagged = measured.filter((file) => issues.get(file)!.length > 0);
+  const checking = photos.filter((file) => !measures.has(file)).length;
+  const issueCounts = (Object.keys(ISSUE_LABELS) as PhotoIssue[])
+    .map((issue) => [issue, issueList.filter((list) => list.includes(issue)).length] as const)
+    .filter(([, count]) => count > 0);
+  const shown = onlyFlagged ? files.filter((file) => issues.get(file)?.length) : files;
 
   function add(incoming: File[]) {
     const next = selectPhotos(files, incoming, limits);
@@ -188,12 +226,51 @@ export function Upload() {
                     Remove all
                   </button>
                 </div>
+                {photos.length ? (
+                  <div className="photo-check" aria-live="polite">
+                    <span className="photo-check-icon" data-state={checking ? 'busy' : flagged.length ? 'warn' : 'ok'}>
+                      <Icon name={checking ? 'scan' : flagged.length ? 'alert' : 'check'} />
+                    </span>
+                    <div>
+                      <strong>
+                        {checking
+                          ? `Checking photos · ${photos.length - checking} of ${photos.length}`
+                          : flagged.length
+                            ? `${flagged.length} ${flagged.length === 1 ? 'photo' : 'photos'} may weaken the model`
+                            : 'Every photo looks sharp and well exposed'}
+                      </strong>
+                      <p className="muted small">
+                        {issueCounts.length
+                          ? issueCounts.map(([issue, count]) => `${count} ${ISSUE_LABELS[issue].toLowerCase()}`).join(' · ')
+                          : 'Blur, exposure, duplicates and resolution are checked in your browser; nothing is sent yet.'}
+                      </p>
+                    </div>
+                    {flagged.length ? (
+                      <div className="row">
+                        <button type="button" className="btn btn-sm btn-ghost" aria-pressed={onlyFlagged} onClick={() => setOnlyFlagged((v) => !v)}>
+                          {onlyFlagged ? 'Show all' : 'Show them'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={uploading}
+                          onClick={() => {
+                            setFiles((list) => list.filter((file) => !flagged.includes(file)));
+                            setOnlyFlagged(false);
+                          }}
+                        >
+                          Remove {flagged.length}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="thumbs">
-                  {files.slice(0, PREVIEW_LIMIT).map((file) => (
-                    <Preview key={`${file.name}:${file.size}`} file={file} onRemove={() => setFiles((list) => list.filter((f) => f !== file))} />
+                  {shown.slice(0, PREVIEW_LIMIT).map((file) => (
+                    <Preview key={`${file.name}:${file.size}:${file.lastModified}`} file={file} issues={issues.get(file)} onRemove={() => setFiles((list) => list.filter((f) => f !== file))} />
                   ))}
                 </div>
-                {files.length > PREVIEW_LIMIT ? <p className="muted" style={{ marginTop: 8, fontSize: 14 }}>and {files.length - PREVIEW_LIMIT} more</p> : null}
+                {shown.length > PREVIEW_LIMIT ? <p className="muted" style={{ marginTop: 8, fontSize: 14 }}>and {shown.length - PREVIEW_LIMIT} more</p> : null}
               </>
             ) : null}
           </div>

@@ -3,6 +3,9 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { useAuth } from '../auth';
 import { initials } from '../lib/format';
 import { Icon } from './icon';
+import { openPalette } from './palette';
+
+const SHORTCUT = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl K';
 
 export function BrandMark() {
   return (
@@ -46,6 +49,11 @@ function Nav() {
         >
           <Icon name={open ? 'x' : 'menu'} />
         </button>
+        <button type="button" className="nav-search" onClick={openPalette} aria-label={`Search (${SHORTCUT})`}>
+          <Icon name="search" />
+          <span>Search</span>
+          <kbd>{SHORTCUT}</kbd>
+        </button>
         <nav id="nav-links" className="nav-links" data-open={open || undefined} aria-label="Main">
           <NavLink to="/collection" className="nav-link">
             Collection
@@ -60,6 +68,9 @@ function Nav() {
               </NavLink>
               <NavLink to="/jobs" className="nav-link">
                 Jobs
+              </NavLink>
+              <NavLink to="/dashboard" className="nav-link">
+                Dashboard
               </NavLink>
               <div className="nav-user">
                 <span className="avatar" title={`Signed in as ${user.display_name}`}>
@@ -97,6 +108,8 @@ function Footer() {
         <span>Vitrine · Browser-based photogrammetry and 3D viewing · Wrocław University of Science and Technology</span>
         <nav aria-label="Footer">
           <Link to="/collection">Collection</Link>
+          <Link to="/compare">Compare</Link>
+          <Link to="/kiosk">Kiosk mode</Link>
           <Link to="/guide">Capture guide</Link>
           <a href="/api/docs">API</a>
         </nav>

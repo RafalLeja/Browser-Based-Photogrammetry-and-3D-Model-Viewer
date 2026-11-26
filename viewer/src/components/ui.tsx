@@ -40,7 +40,7 @@ export const useToast = () => useContext(ToastContext);
 // ---------- Dialog ----------
 
 /** A native <dialog>: focus is trapped and Escape closes it, with no extra code. */
-export function Dialog({ open, onClose, children, label }: { open: boolean; onClose: () => void; children: ReactNode; label: string }) {
+export function Dialog({ open, onClose, children, label, wide }: { open: boolean; onClose: () => void; children: ReactNode; label: string; wide?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
@@ -51,7 +51,7 @@ export function Dialog({ open, onClose, children, label }: { open: boolean; onCl
   return (
     <dialog
       ref={ref}
-      className="dialog"
+      className={wide ? 'dialog dialog-wide' : 'dialog'}
       aria-label={label}
       onClose={onClose}
       onClick={(event) => {

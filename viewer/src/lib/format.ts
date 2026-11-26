@@ -69,3 +69,17 @@ export function escapeHtml(text: string): string {
   const entities: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   return text.replace(/[&<>"']/g, (char) => entities[char]);
 }
+
+/** Whether every word of the query appears in the text, ignoring case: "dam hel" finds "Damaged Helmet". */
+export function fuzzyMatch(text: string, query: string): boolean {
+  const haystack = text.toLowerCase();
+  return query.toLowerCase().split(/\s+/).filter(Boolean).every((word) => haystack.includes(word));
+}
+
+/** Round axis maximum and its ticks: 0 / 1 / 2 … or 0 / 5 / 10 …, never a fractional job. */
+export function niceTicks(max: number): number[] {
+  if (max <= 4) return Array.from({ length: Math.max(1, max) + 1 }, (_, i) => i);
+  const step = [1, 2, 5, 10, 20, 25, 50, 100].find((s) => max / s <= 5) ?? Math.ceil(max / 5);
+  const top = Math.ceil(max / step) * step;
+  return Array.from({ length: top / step + 1 }, (_, i) => i * step);
+}

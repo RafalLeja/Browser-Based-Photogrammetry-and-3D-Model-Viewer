@@ -5,6 +5,7 @@ import { useAuth } from '../auth';
 import { Icon } from '../components/icon';
 import { EmptyState, ErrorState, useAsync, useDocumentTitle } from '../components/ui';
 import { formatCount, formatRelative } from '../lib/format';
+import { licenseBadge } from '../lib/museum';
 
 const PAGE_SIZE = 24;
 const SORTS: { value: NonNullable<ObjectQuery['sort']>; label: string }[] = [
@@ -33,6 +34,7 @@ function ObjectCard({ object }: { object: CollectionObject }) {
         <div className="card-badges">
           {object.status !== 'ready' ? <span className="badge">{object.status === 'processing' ? 'Processing' : 'Failed'}</span> : null}
           {object.is_demo ? <span className="badge">Demo</span> : null}
+          {object.license ? <span className="badge" title="Licence">{licenseBadge(object.license)}</span> : null}
           {object.annotation_count > 0 ? (
             <span className="badge">
               <Icon name="pin" /> {object.annotation_count}
@@ -123,10 +125,20 @@ export function Gallery() {
   return (
     <div className="page">
       <div className="container">
-        <header className="page-head">
-          <p className="eyebrow">The collection</p>
-          <h1 className="page-title">Every object, from every angle.</h1>
-          <p className="page-lede">Turn each record in 3D, measure it and read the notes curators pinned to it.</p>
+        <header className="page-head page-head-split">
+          <div>
+            <p className="eyebrow">The collection</p>
+            <h1 className="page-title">Every object, from every angle.</h1>
+            <p className="page-lede">Turn each record in 3D, measure it and read the notes curators pinned to it.</p>
+          </div>
+          <div className="row">
+            <Link to="/compare" className="btn btn-sm btn-ghost">
+              <Icon name="columns" /> Compare
+            </Link>
+            <Link to="/kiosk" className="btn btn-sm btn-ghost">
+              <Icon name="monitor" /> Kiosk mode
+            </Link>
+          </div>
         </header>
 
         <div className="toolbar">
@@ -136,7 +148,7 @@ export function Gallery() {
             <input
               className="input"
               type="search"
-              placeholder="Search by title, description or tag"
+              placeholder="Search by title, accession number, maker or tag"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
             />

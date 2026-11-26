@@ -1,20 +1,34 @@
 // The object page: the 3D stage with its tool dock, and a side panel with the object's details,
-// notes, measurements and lighting. It talks to the viewer only through its public API.
+// notes, measurements, lighting and inspection tools. It talks to the viewer only through its
+// public API.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api, type Annotation, type SharedViewState } from '../api';
 import { useAuth } from '../auth';
-import type { EnvironmentOptions, Measurement, ModelInfo, Pin, SectionAxis, Tool, Viewer } from '../index';
+import type { EnvironmentOptions, Measurement, ModelInfo, Pin, RenderMode, SectionAxis, Tool, Viewer } from '../index';
 import { Icon, type IconName } from '../components/icon';
 import { ModelStage } from '../components/model-stage';
 import { ConfirmDialog, Dialog, EmptyState, ErrorState, useAsync, useDocumentTitle, useInterval, useToast } from '../components/ui';
 import { escapeHtml, formatCount } from '../lib/format';
 import { DEFAULT_LIGHT, lightDirection, sharedLight, type LightState } from '../lib/light';
-import { LightPanel, MeasurePanel, NotesPanel, OverviewPanel, type DraftPin } from './object-panels';
+import { citation } from '../lib/museum';
+import {
+  EditObjectDialog,
+  InspectPanel,
+  LightPanel,
+  MeasurePanel,
+  NotesPanel,
+  OverviewPanel,
+  RENDER_MODES,
+  type DraftPin,
+  type ExportFormat,
+  type NoteFilter,
+} from './object-panels';
 
 const STUDIO_HDR = `${import.meta.env.BASE_URL}hdr/studio_small_09_1k.hdr`;
 const TOUR_STEP_MS = 4500;
-type Tab = 'overview' | 'notes' | 'measure' | 'light';
+const SWEEP_MS = 9000;
+type Tab = 'overview' | 'notes' | 'measure' | 'light' | 'inspect';
 
 export function environmentOptions(light: LightState): EnvironmentOptions {
   if (light.environment === 'studio') return { hdrUrl: STUDIO_HDR, showBackground: light.background };
@@ -32,9 +46,18 @@ export function applyLight(viewer: Viewer, light: LightState, previous: LightSta
   });
 }
 
-function toPin(annotation: Annotation): Pin {
-  return { id: String(annotation.id), position: annotation.position, normal: annotation.normal, title: annotation.title, text: annotation.text };
+export function toPin(annotation: Annotation): Pin {
+  return {
+    id: String(annotation.id),
+    position: annotation.position,
+    normal: annotation.normal,
+    title: annotation.title,
+    text: annotation.text,
+    kind: annotation.category,
+  };
 }
+
+const prefersReducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function DockButton(props: { icon: IconName; label: string; pressed?: boolean; disabled?: boolean; onClick: () => void; shortcut?: string }) {
   const title = props.shortcut ? `${props.label} (${props.shortcut})` : props.label;
@@ -52,6 +75,20 @@ function DockButton(props: { icon: IconName; label: string; pressed?: boolean; d
     </button>
   );
 }
+
+const SHORTCUTS: [string, string][] = [
+  ['M', 'Measure a distance'],
+  ['N', 'Add a note (curators)'],
+  ['S', 'Section plane on or off'],
+  ['D', 'Overall dimensions on or off'],
+  ['1 – 4', 'Colour, clay, wireframe, normals'],
+  ['R', 'Reset the view'],
+  ['F', 'Full screen'],
+  ['Arrow keys', 'Pan, with the 3D view focused'],
+  ['Shift + arrows', 'Turn the model'],
+  ['Esc', 'Stop the current tool'],
+  ['?', 'This list'],
+];
 
 export function ViewerPage() {
   const { id } = useParams();
@@ -74,23 +111,28 @@ export function ViewerPage() {
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [activePin, setActivePin] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftPin | null>(null);
+  const [noteFilter, setNoteFilter] = useState<NoteFilter>('all');
   const [light, setLight] = useState<LightState>(DEFAULT_LIGHT);
+  const [sweeping, setSweeping] = useState(false);
   const [autoRotate, setAutoRotate] = useState(false);
+  const [renderMode, setRenderMode] = useState<RenderMode>('standard');
+  const [dimensions, setDimensions] = useState(false);
   const [section, setSection] = useState({ enabled: false, axis: 'y' as SectionAxis, position: 0.5, flip: false });
-  const [shareOpen, setShareOpen] = useState(false);
+  const [dialog, setDialog] = useState<'share' | 'cite' | 'edit' | 'shortcuts' | null>(null);
   const [shareLink, setShareLink] = useState<{ url: string; embed: string } | null>(null);
   const [confirm, setConfirm] = useState<{ kind: 'object' } | { kind: 'note'; id: number } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [tourIndex, setTourIndex] = useState<number | null>(null);
   // The stage starts with the default environment, so only a change needs a new one.
   const appliedLight = useRef<LightState | null>(DEFAULT_LIGHT);
   const coverAttempted = useRef(false);
 
   const pins = useMemo(() => {
-    const list = (annotations.data ?? []).map(toPin);
+    const list = (annotations.data ?? []).filter((a) => noteFilter === 'all' || a.category === noteFilter).map(toPin);
     if (draft) list.push({ id: 'draft', position: draft.position, normal: draft.normal, title: 'New note' });
     return list;
-  }, [annotations.data, draft]);
+  }, [annotations.data, draft, noteFilter]);
 
   // ----- viewer wiring -----
 
@@ -132,6 +174,20 @@ export function ViewerPage() {
     viewer?.setActivePin(activePin);
   }, [viewer, activePin]);
 
+  useEffect(() => {
+    if (viewer && info) viewer.setRenderMode(renderMode);
+  }, [viewer, info, renderMode]);
+
+  useEffect(() => {
+    if (viewer && info) viewer.setDimensions(dimensions);
+  }, [viewer, info, dimensions]);
+
+  // A visitor opening a published object counts as a visit (the server ignores curators and repeats).
+  const ready = object.data?.status === 'ready';
+  useEffect(() => {
+    if (ready) api.visit(objectId).catch(() => undefined);
+  }, [ready, objectId]);
+
   // A shared link (?view=…) restores the camera and lighting once the model is in place.
   const viewId = params.get('view');
   useEffect(() => {
@@ -158,13 +214,37 @@ export function ViewerPage() {
     const timer = setTimeout(() => {
       coverAttempted.current = true;
       viewer
-        .screenshot({ maxSize: 1200 })
+        .screenshot({ maxSize: 1200, fit: 'subject' })
         .then((image) => api.setThumbnail(objectId, image))
         .then((updated) => setObjectData(updated))
         .catch(() => undefined); // A missing cover is cosmetic; the curator can set one by hand.
     }, 1200);
     return () => clearTimeout(timer);
   }, [viewer, info, curator, hasCover, objectId, setObjectData]);
+
+  // Raking light sweep: the light circles the object once, like a conservator moving a lamp.
+  useEffect(() => {
+    if (!sweeping) return;
+    const start = performance.now();
+    const from = light.azimuth;
+    if (prefersReducedMotion()) {
+      let step = 0;
+      const timer = setInterval(() => {
+        step++;
+        setLight((l) => ({ ...l, azimuth: (from + step * 45) % 360 }));
+        if (step >= 8) setSweeping(false);
+      }, 900);
+      return () => clearInterval(timer);
+    }
+    let frame = requestAnimationFrame(function tick(now) {
+      const t = Math.min(1, (now - start) / SWEEP_MS);
+      setLight((l) => ({ ...l, azimuth: Math.round(from + t * 360) % 360 }));
+      if (t < 1) frame = requestAnimationFrame(tick);
+      else setSweeping(false);
+    });
+    return () => cancelAnimationFrame(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- starts from the azimuth at the moment the sweep begins
+  }, [sweeping]);
 
   const setTool = useCallback(
     (next: Tool) => {
@@ -194,6 +274,7 @@ export function ViewerPage() {
   useEffect(() => {
     if (tourIndex === null || !annotations.data || !viewer) return;
     const pinId = String(annotations.data[tourIndex].id);
+    setNoteFilter('all');
     setActivePin(pinId);
     viewer.focusPin(pinId);
   }, [tourIndex, annotations.data, viewer]);
@@ -203,13 +284,16 @@ export function ViewerPage() {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       const target = event.target as HTMLElement;
-      if (event.metaKey || event.ctrlKey || event.altKey || target.closest('input, textarea, select, [contenteditable]')) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || target.closest('input, textarea, select, [contenteditable], dialog')) return;
       const key = event.key.toLowerCase();
       if (key === 'm') setTool(tool === 'measure' ? 'orbit' : 'measure');
       else if (key === 'n' && curator) setTool(tool === 'annotate' ? 'orbit' : 'annotate');
       else if (key === 'r') viewer?.resetView();
       else if (key === 'f') toggleFullscreen();
       else if (key === 's') setSection((s) => ({ ...s, enabled: !s.enabled }));
+      else if (key === 'd') setDimensions((on) => !on);
+      else if (key === '?') setDialog('shortcuts');
+      else if (['1', '2', '3', '4'].includes(key)) setRenderMode(RENDER_MODES[Number(key) - 1].mode);
       else return;
       event.preventDefault();
     }
@@ -224,20 +308,37 @@ export function ViewerPage() {
 
   // ----- actions -----
 
-  async function saveImage() {
-    if (!viewer || !object.data) return;
-    const image = await viewer.screenshot({ type: 'image/png' });
+  function save(blob: Blob, extension: string) {
     const link = document.createElement('a');
-    link.href = URL.createObjectURL(image);
-    link.download = `${object.data.title.replace(/[^\w-]+/g, '-').toLowerCase()}.png`;
+    link.href = URL.createObjectURL(blob);
+    link.download = `${(object.data?.title ?? 'model').replace(/[^\w-]+/g, '-').toLowerCase()}.${extension}`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
+
+  async function saveImage() {
+    if (!viewer) return;
+    save(await viewer.screenshot({ type: 'image/png' }), 'png');
+  }
+
+  async function exportModel(format: ExportFormat) {
+    if (!viewer || !object.data) return;
+    setExporting(format);
+    try {
+      // 3D printers read STL coordinates as millimetres; a true-to-scale model is in metres.
+      const scale = format === 'stl' && object.data.dimensions_mm ? 1000 : 1;
+      save(await viewer.exportModel(format, { scale }), format);
+    } catch (err) {
+      toast(err instanceof Error ? err.message.replace('[viewer] ', '') : 'Export failed', 'alert');
+    } finally {
+      setExporting(null);
+    }
   }
 
   async function setCover() {
     if (!viewer) return;
     try {
-      const updated = await api.setThumbnail(objectId, await viewer.screenshot({ maxSize: 1200 }));
+      const updated = await api.setThumbnail(objectId, await viewer.screenshot({ maxSize: 1200, fit: 'subject' }));
       object.setData(updated);
       toast('Cover image updated');
     } catch (err) {
@@ -247,7 +348,7 @@ export function ViewerPage() {
 
   async function openShare() {
     if (!viewer) return;
-    setShareOpen(true);
+    setDialog('share');
     setShareLink(null);
     const state: SharedViewState = {
       ...viewer.getView(),
@@ -265,7 +366,7 @@ export function ViewerPage() {
         embed: `<iframe src="${origin}/embed/${objectId}?view=${view.id}" title="${escapeHtml(object.data?.title ?? '3D model')}" width="800" height="600" style="border:0;border-radius:12px" allow="fullscreen" loading="lazy"></iframe>`,
       });
     } catch (err) {
-      setShareOpen(false);
+      setDialog(null);
       toast(err instanceof Error ? err.message : 'Could not create the link', 'alert');
     }
   }
@@ -321,6 +422,7 @@ export function ViewerPage() {
   const trueScale = Boolean(data?.dimensions_mm);
   const hint =
     tool === 'measure' ? 'Click two points on the model · Esc to stop' : tool === 'annotate' ? 'Click the surface to place a note · Esc to stop' : null;
+  const cite = data ? citation(data, `${location.origin}/objects/${data.id}`) : null;
 
   return (
     <div className="object-layout">
@@ -331,7 +433,7 @@ export function ViewerPage() {
             format={data.model_format}
             up={data.up}
             trueScale={trueScale}
-            label={`3D view of ${data.title}`}
+            label={data.alt_text ? `3D view of ${data.title}: ${data.alt_text}` : `3D view of ${data.title}`}
             environment={environmentOptions(DEFAULT_LIGHT)}
             autoRotate={autoRotate}
             onViewer={setViewer}
@@ -359,9 +461,19 @@ export function ViewerPage() {
           <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
             {data?.is_demo ? <span className="glass glass-pill">Demo reconstruction</span> : null}
             {viewer && info ? (
-              <span className="glass glass-pill" title="Graphics backend and triangle count">
+              <span className="glass glass-pill stage-chip" title="Graphics backend and triangle count">
                 <Icon name="chip" /> {viewer.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2'} · {formatCount(info.triangles)} △
               </span>
+            ) : null}
+            {data?.model_url ? (
+              <>
+                <Link to={`/compare?a=${objectId}`} className="glass glass-pill" title="Compare with another object">
+                  <Icon name="columns" /> <span className="pill-label">Compare</span>
+                </Link>
+                <Link to={`/kiosk?ids=${objectId}`} className="glass glass-pill" title="Present full screen, for a gallery screen or a lecture">
+                  <Icon name="monitor" /> <span className="pill-label">Present</span>
+                </Link>
+              </>
             ) : null}
           </div>
         </div>
@@ -411,6 +523,7 @@ export function ViewerPage() {
             <DockButton icon="pin" label="Add note" shortcut="N" pressed={tool === 'annotate'} onClick={() => setTool(tool === 'annotate' ? 'orbit' : 'annotate')} disabled={!info} />
           ) : null}
           <DockButton icon="section" label="Section" shortcut="S" pressed={section.enabled} onClick={() => setSection((s) => ({ ...s, enabled: !s.enabled }))} disabled={!info} />
+          <DockButton icon="box" label="Dimensions" shortcut="D" pressed={dimensions} onClick={() => setDimensions((on) => !on)} disabled={!info} />
           <span className="dock-divider" />
           <DockButton icon="reset" label="Reset view" shortcut="R" onClick={() => viewer?.resetView()} disabled={!info} />
           <DockButton icon="plus" label="Zoom in" onClick={() => viewer?.zoom(0.8)} disabled={!info} />
@@ -420,6 +533,7 @@ export function ViewerPage() {
           <DockButton icon="camera" label="Save image" onClick={() => void saveImage()} disabled={!info} />
           <DockButton icon="share" label="Share this view" onClick={() => void openShare()} disabled={!info} />
           <DockButton icon="maximize" label="Full screen" shortcut="F" onClick={toggleFullscreen} />
+          <DockButton icon="keyboard" label="Keyboard shortcuts" shortcut="?" onClick={() => setDialog('shortcuts')} />
         </div>
       </section>
 
@@ -427,6 +541,7 @@ export function ViewerPage() {
         <div className="panel-head">
           {data ? (
             <>
+              {data.record.accession_number ? <p className="eyebrow panel-eyebrow">{data.record.accession_number}</p> : null}
               <h1 className="panel-title">{data.title}</h1>
             </>
           ) : (
@@ -440,6 +555,7 @@ export function ViewerPage() {
               ['notes', 'Notes', noteCount],
               ['measure', 'Measure', measurements.length || null],
               ['light', 'Light', null],
+              ['inspect', 'Inspect', null],
             ] as [Tab, string, number | null][]
           ).map(([key, label, count]) => (
             <button
@@ -464,14 +580,13 @@ export function ViewerPage() {
             <OverviewPanel
               object={data}
               info={info}
-              backend={viewer?.backend ?? null}
               curator={curator}
-              onSave={async (patch) => {
-                object.setData(await api.updateObject(objectId, patch));
-                toast('Details saved');
-              }}
+              exporting={exporting}
+              onEdit={() => setDialog('edit')}
               onCover={() => void setCover()}
               onDelete={() => setConfirm({ kind: 'object' })}
+              onCite={() => setDialog('cite')}
+              onExport={(format) => void exportModel(format)}
             />
           ) : tab === 'notes' ? (
             <NotesPanel
@@ -481,27 +596,31 @@ export function ViewerPage() {
               placing={tool === 'annotate'}
               draft={draft}
               touring={tourIndex !== null}
+              filter={noteFilter}
+              onFilter={setNoteFilter}
               onSelect={(pinId) => {
                 setTourIndex(null);
                 setActivePin(pinId);
                 viewer?.focusPin(pinId);
               }}
               onStartPlacing={() => setTool('annotate')}
-              onSaveDraft={async (title, text) => {
+              onSaveDraft={async (note) => {
                 if (!draft) return;
-                const created = await api.createAnnotation(objectId, { ...draft, title, text });
+                const created = await api.createAnnotation(objectId, { ...draft, ...note });
                 annotations.setData((list) => [...(list ?? []), created]);
                 setDraft(null);
+                setNoteFilter((filter) => (filter === 'all' || filter === created.category ? filter : 'all'));
                 setActivePin(String(created.id));
                 toast('Note added');
               }}
               onCancelDraft={() => setDraft(null)}
-              onUpdate={async (noteId, title, text) => {
-                const updated = await api.updateAnnotation(noteId, { title, text });
+              onUpdate={async (noteId, note) => {
+                const updated = await api.updateAnnotation(noteId, note);
                 annotations.setData((list) => (list ?? []).map((a) => (a.id === noteId ? updated : a)));
               }}
               onDelete={(noteId) => setConfirm({ kind: 'note', id: noteId })}
               onTour={() => setTourIndex((index) => (index === null ? 0 : null))}
+              onReport={() => navigate(`/objects/${objectId}/report`)}
             />
           ) : tab === 'measure' ? (
             <MeasurePanel
@@ -512,13 +631,34 @@ export function ViewerPage() {
               onUndo={() => viewer?.undoMeasurement()}
               onClear={() => viewer?.clearMeasurements()}
             />
+          ) : tab === 'light' ? (
+            <LightPanel
+              light={light}
+              autoRotate={autoRotate}
+              sweeping={sweeping}
+              onChange={(next) => {
+                setSweeping(false);
+                setLight(next);
+              }}
+              onAutoRotate={setAutoRotate}
+              onSweep={() => setSweeping((on) => !on)}
+            />
           ) : (
-            <LightPanel light={light} autoRotate={autoRotate} onChange={setLight} onAutoRotate={setAutoRotate} />
+            <InspectPanel
+              object={data}
+              info={info}
+              backend={viewer?.backend ?? null}
+              renderMode={renderMode}
+              dimensions={dimensions}
+              trueScale={trueScale}
+              onRenderMode={setRenderMode}
+              onDimensions={setDimensions}
+            />
           )}
         </div>
       </aside>
 
-      <Dialog open={shareOpen} onClose={() => setShareOpen(false)} label="Share this view">
+      <Dialog open={dialog === 'share'} onClose={() => setDialog(null)} label="Share this view">
         <h2>Share this view</h2>
         <p className="muted">The link opens the model with this camera angle and lighting.</p>
         {shareLink ? (
@@ -546,18 +686,83 @@ export function ViewerPage() {
           <div className="spinner" aria-label="Creating link" />
         )}
         <div className="dialog-actions">
-          <button type="button" className="btn btn-ghost" onClick={() => setShareOpen(false)}>
+          <button type="button" className="btn btn-ghost" onClick={() => setDialog(null)}>
             Done
           </button>
         </div>
       </Dialog>
+
+      <Dialog open={dialog === 'cite'} onClose={() => setDialog(null)} label="Cite this object">
+        <h2>Cite this object</h2>
+        <p className="muted">For papers, theses and teaching material. The link always opens this object.</p>
+        {cite ? (
+          <>
+            <div className="field">
+              <span className="label">Reference</span>
+              <div className="code-box">
+                <code>{cite.text}</code>
+                <button type="button" className="btn btn-sm" onClick={() => void copy(cite.text, 'Reference')}>
+                  <Icon name="copy" /> Copy
+                </button>
+              </div>
+            </div>
+            <div className="field">
+              <span className="label">BibTeX</span>
+              <div className="code-box">
+                <code style={{ whiteSpace: 'pre-wrap' }}>{cite.bibtex}</code>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => void copy(cite.bibtex, 'BibTeX')}>
+                  <Icon name="copy" /> Copy
+                </button>
+              </div>
+            </div>
+          </>
+        ) : null}
+        <div className="dialog-actions">
+          <button type="button" className="btn btn-ghost" onClick={() => setDialog(null)}>
+            Done
+          </button>
+        </div>
+      </Dialog>
+
+      <Dialog open={dialog === 'shortcuts'} onClose={() => setDialog(null)} label="Keyboard shortcuts">
+        <h2>Keyboard shortcuts</h2>
+        <dl className="shortcuts">
+          {SHORTCUTS.map(([keys, action]) => (
+            <div key={keys}>
+              <dt>
+                <kbd>{keys}</kbd>
+              </dt>
+              <dd>{action}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="dialog-actions">
+          <button type="button" className="btn btn-ghost" onClick={() => setDialog(null)}>
+            Done
+          </button>
+        </div>
+      </Dialog>
+
+      {data && dialog === 'edit' ? (
+        // Mounted only while open: it starts from the current details, and a background update
+        // (such as the automatic cover) cannot reset what the curator is typing.
+        <EditObjectDialog
+          object={data}
+          open
+          onClose={() => setDialog(null)}
+          onSave={async (patch) => {
+            object.setData(await api.updateObject(objectId, patch));
+            toast('Details saved');
+          }}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={confirm !== null}
         title={confirm?.kind === 'object' ? 'Delete this object?' : 'Delete this note?'}
         body={
           confirm?.kind === 'object'
-            ? 'The object, its model, notes and shared links are removed for everyone. This cannot be undone.'
+            ? 'The object, its photos, model, notes and shared links are removed for everyone. This cannot be undone.'
             : 'The note is removed for everyone. This cannot be undone.'
         }
         confirm="Delete"

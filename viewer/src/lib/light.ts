@@ -15,6 +15,12 @@ export interface LightState {
 
 export const DEFAULT_LIGHT: LightState = { environment: 'studio', exposure: 1, intensity: 1, azimuth: 45, elevation: 40, shadow: 0.5, background: false };
 
+/**
+ * Raking light, as conservators use it: one strong light a few degrees above the surface, no fill,
+ * so every bump casts a shadow and relief, tool marks and cracks stand out.
+ */
+export const RAKING_LIGHT: Partial<LightState> = { environment: 'none', intensity: 3.2, elevation: 6, shadow: 0.15, exposure: 1.1, background: false };
+
 /** Light coming from `azimuth` degrees around the model and `elevation` degrees above the horizon. */
 export function lightDirection(azimuth: number, elevation = DEFAULT_LIGHT.elevation): [number, number, number] {
   const a = (azimuth * Math.PI) / 180;

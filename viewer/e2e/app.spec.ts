@@ -160,7 +160,7 @@ test('the capture guide and the 404 page render', async ({ page }) => {
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
-  for (const path of ['/', '/collection', '/guide', '/login']) {
+  for (const path of ['/', '/collection', '/guide', '/login', '/compare']) {
     test(`${path} fits the screen without sideways scrolling`, async ({ page }) => {
       await page.goto(path);
       await expect(page.locator('#main')).toBeVisible();
@@ -178,5 +178,8 @@ test.describe('on a phone', () => {
     const stage = (await page.locator('.stage').boundingBox())!;
     const panel = (await page.locator('.panel').boundingBox())!;
     expect(panel.y).toBeGreaterThanOrEqual(stage.y + stage.height - 1);
+    // Five panel tabs and the dock must not push the page sideways.
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
   });
 });
