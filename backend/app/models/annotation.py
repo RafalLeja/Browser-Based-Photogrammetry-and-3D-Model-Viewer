@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import JSON, ForeignKey, Integer, String, Text
+from sqlalchemy import text as sql  # `text` is also a column of this model
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, utcnow
@@ -17,6 +18,9 @@ class Annotation(Base):
     normal: Mapped[list[float]] = mapped_column(JSON)
     title: Mapped[str] = mapped_column(String(80))
     text: Mapped[str] = mapped_column(Text, default="")
+    # What the note records (a key of NOTE_CATEGORIES); damage notes may carry a severity.
+    category: Mapped[str] = mapped_column(String(20), default="note", server_default=sql("'note'"))
+    severity: Mapped[str | None] = mapped_column(String(12), nullable=True)
     author_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)

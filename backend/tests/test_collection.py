@@ -161,3 +161,18 @@ def test_the_default_demo_model_is_the_small_upright_sample() -> None:
 
     assert Settings().demo_model == "models/eagle-web.glb"
     assert (REPO_ROOT / "samples" / Settings().demo_model).is_file()
+
+
+def test_editing_details_or_the_cover_keeps_the_model_url(curator: TestClient, worker: Worker) -> None:
+    from app.models import CollectionObject
+
+    object_id = publish(curator, worker, "Vase")
+    url = curator.get(f"/api/v1/objects/{object_id}").json()["model_url"]
+    curator.patch(f"/api/v1/objects/{object_id}", json={"title": "Vase, renamed"})
+    covered = curator.put(f"/api/v1/objects/{object_id}/thumbnail", content=PNG).json()
+    assert covered["model_url"] == url  # The viewer must not download the model again.
+
+    with curator.app.state.sessionmaker() as db:
+        db.get(CollectionObject, object_id).file_size = 123  # A new model was published.
+        db.commit()
+    assert curator.get(f"/api/v1/objects/{object_id}").json()["model_url"] != url

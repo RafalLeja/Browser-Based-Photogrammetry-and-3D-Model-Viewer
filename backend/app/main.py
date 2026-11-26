@@ -11,12 +11,14 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.health import router as health_router
 from app.api.routes.jobs import router as jobs_router
 from app.api.routes.objects import router as objects_router
+from app.api.routes.stats import router as stats_router
 from app.api.routes.uploads import router as uploads_router
 from app.api.routes.views import router as views_router
 from app.core.config import Settings
 from app.core.logging_config import setup_logging
 from app.core.security import RateLimiter
 from app.database.base import Base
+from app.database.migrate import add_missing_columns
 from app.database.session import make_engine, make_sessionmaker
 from app.seed import seed
 from app.worker.runner import Worker, recover_interrupted
@@ -36,8 +38,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # shortcut: create_all instead of migrations; add Alembic before the schema changes in production.
         Base.metadata.create_all(engine)
+        add_missing_columns(engine)  # Columns added since the database was created.
         with sessions() as db:
             seed(db, settings)
         if interrupted := recover_interrupted(sessions):
@@ -65,6 +67,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.login_limiter = RateLimiter(settings.login_attempts_per_minute, 60)
     app.state.upload_limiter = RateLimiter(settings.uploads_per_hour, 3600)
     app.state.view_limiter = RateLimiter(30, 60)
+    # One visit per visitor and object per half hour: a reload or a return trip is not a new visit.
+    app.state.visit_limiter = RateLimiter(1, 30 * 60)
 
     allowed_origins = set(settings.cors_origins)
 
@@ -80,7 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-        if request.url.path.startswith("/api/v1/auth") or request.url.path.startswith("/api/v1/jobs"):
+        if request.url.path.startswith(("/api/v1/auth", "/api/v1/jobs", "/api/v1/stats")):
             response.headers.setdefault("Cache-Control", "no-store")
         return response
 
@@ -100,6 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         jobs_router,
         annotations_router,
         views_router,
+        stats_router,
     ):
         app.include_router(router, prefix="/api/v1")
     return app

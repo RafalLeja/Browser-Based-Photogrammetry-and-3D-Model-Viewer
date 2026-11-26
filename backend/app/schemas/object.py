@@ -5,7 +5,7 @@ import re
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -47,6 +47,23 @@ RequiredStr = Annotated[str, AfterValidator(clean_text), AfterValidator(_not_bla
 Tags = Annotated[list[str], AfterValidator(_tags)]
 
 
+# Rights statements a curator can choose. Open licences allow visitors to download the model.
+LICENSES: dict[str, str] = {
+    "cc0": "CC0 1.0 (public domain)",
+    "cc-by": "CC BY 4.0",
+    "cc-by-sa": "CC BY-SA 4.0",
+    "cc-by-nc": "CC BY-NC 4.0",
+    "cc-by-nc-nd": "CC BY-NC-ND 4.0",
+    "all-rights-reserved": "All rights reserved",
+}
+OPEN_LICENSES = frozenset(LICENSES) - {"all-rights-reserved"}
+License = Literal["cc0", "cc-by", "cc-by-sa", "cc-by-nc", "cc-by-nc-nd", "all-rights-reserved"]
+
+# What a note records. Damage notes may carry a severity, on the scale condition reports use.
+NoteCategory = Literal["note", "detail", "inscription", "damage", "repair"]
+Severity = Literal["negligible", "slight", "moderate", "marked", "extreme"]
+
+
 def iso(value: datetime | None) -> str | None:
     if value is None:
         return None
@@ -67,11 +84,36 @@ class LoginIn(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+class ObjectRecord(BaseModel):
+    """The museum record of an object. Every field is optional free text; empty fields are dropped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    accession_number: CleanStr | None = Field(default=None, max_length=64)
+    maker: CleanStr | None = Field(default=None, max_length=200)
+    date: CleanStr | None = Field(default=None, max_length=100)
+    place: CleanStr | None = Field(default=None, max_length=200)
+    material: CleanStr | None = Field(default=None, max_length=200)
+    credit_line: CleanStr | None = Field(default=None, max_length=300)
+    provenance: CleanStr | None = Field(default=None, max_length=2000)
+
+
+def stored_record(record: dict | None) -> dict[str, str] | None:
+    """The fields worth storing: empty values are left out, and an empty record is None."""
+    kept = {key: value for key, value in (record or {}).items() if value}
+    return kept or None
+
+
 class ObjectOut(BaseModel):
     id: int
     title: str
     description: str
     tags: list[str]
+    record: dict[str, str]
+    license: str | None
+    downloadable: bool
+    alt_text: str | None
+    visits: int
     status: str
     model_url: str | None
     model_format: str
@@ -100,6 +142,10 @@ class ObjectPatch(BaseModel):
     tags: Tags | None = None
     up: Vec3 | None = None
     dimensions_mm: Vec3 | None = None
+    # For these, null clears the value.
+    record: ObjectRecord | None = None
+    license: License | None = None
+    alt_text: CleanStr | None = Field(default=None, max_length=1000)
 
 
 class TagCount(BaseModel):
@@ -112,6 +158,14 @@ class AnnotationIn(BaseModel):
     normal: Vec3
     title: RequiredStr = Field(min_length=1, max_length=80)
     text: CleanStr = Field(default="", max_length=2000)
+    category: NoteCategory = "note"
+    severity: Severity | None = None
+
+    @model_validator(mode="after")
+    def _severity_only_for_damage(self) -> "AnnotationIn":
+        if self.category != "damage":
+            self.severity = None
+        return self
 
 
 class AnnotationPatch(BaseModel):
@@ -119,6 +173,8 @@ class AnnotationPatch(BaseModel):
     normal: Vec3 | None = None
     title: RequiredStr | None = Field(default=None, min_length=1, max_length=80)
     text: CleanStr | None = Field(default=None, max_length=2000)
+    category: NoteCategory | None = None
+    severity: Severity | None = None  # null clears it
 
 
 class AnnotationOut(BaseModel):
@@ -128,6 +184,8 @@ class AnnotationOut(BaseModel):
     normal: list[float]
     title: str
     text: str
+    category: str
+    severity: str | None
     author: str | None
     created_at: str
     updated_at: str
@@ -181,3 +239,33 @@ class PipelineInfo(BaseModel):
     reason: str
     stages: list[StageOut]
     limits: dict[str, int]
+
+
+class DayCount(BaseModel):
+    date: str
+    done: int
+    failed: int
+
+
+class TopObject(BaseModel):
+    id: int
+    title: str
+    visits: int
+    thumbnail_url: str | None
+
+
+class Stats(BaseModel):
+    """The curator dashboard: the collection, the work behind it and how visitors use it."""
+
+    objects: dict[str, int]
+    notes: int
+    notes_by_category: dict[str, int]
+    shared_views: int
+    visits: int
+    storage_bytes: dict[str, int]
+    jobs: dict[str, int]
+    median_job_seconds: float | None
+    stage_seconds: dict[str, float]
+    jobs_by_day: list[DayCount]
+    top_objects: list[TopObject]
+    recent_jobs: list[JobOut]

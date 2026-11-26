@@ -24,16 +24,20 @@ SHOWCASE: tuple[dict, ...] = (
         "tags": ["sculpture", "photogrammetry", "outdoor"],
         "model": "models/eagle-web.glb",
         "thumbnail": "thumbnails/eagle.webp",
+        "record": {"accession_number": "VIT-0001", "credit_line": "Photographed and reconstructed by the Vitrine team"},
+        "alt_text": "A weathered grey sculpture of an eagle with its wings raised, standing on a disc of leaf-covered ground.",
         "notes": [
             {
                 "title": "Head",
                 "text": "Notes like this record condition, history or a question for a colleague. Click one to fly the camera to it.",
+                "category": "detail",
                 "position": [0.2568, 2.8205, 0.1814],
                 "normal": [0.6682, 0.6676, 0.3285],
             },
             {
                 "title": "Raised wing",
-                "text": "Switch the light to Key only and turn the key light: the feather grooves stand out in relief.",
+                "text": "Choose Raking light in the Light panel and sweep it around: the feather grooves stand out in relief.",
+                "category": "detail",
                 "position": [0.698, 3.0241, -0.6014],
                 "normal": [0.3412, -0.0985, 0.9348],
             },
@@ -54,6 +58,7 @@ SHOWCASE: tuple[dict, ...] = (
         "tags": ["photogrammetry", "raw-scan"],
         "model": "models/eagle-dense.ply",
         "format": "ply",
+        "record": {"accession_number": "VIT-0001", "credit_line": "Photographed and reconstructed by the Vitrine team"},
         "up": [0.2014, -0.6971, -0.6881],
         "thumbnail": "thumbnails/eagle-raw.webp",
     },
@@ -66,6 +71,10 @@ SHOWCASE: tuple[dict, ...] = (
         "tags": ["reference", "pbr"],
         "model": "models/DamagedHelmet.glb",
         "thumbnail": "thumbnails/helmet.webp",
+        # The most restrictive licence in its history: the original model is CC BY-NC 4.0.
+        "license": "cc-by-nc",
+        "record": {"maker": "theblueturtle_; glTF version by ctxwing", "date": "2016 (glTF version 2018)", "credit_line": "Khronos glTF Sample Assets"},
+        "alt_text": "A battle-worn sci-fi flight helmet with a dark reflective visor, scorched and scratched metal plates.",
     },
 )
 
@@ -103,6 +112,9 @@ def ensure_showcase(db: Session, settings: Settings) -> None:
             model_path=f"samples:{model}",
             model_format=item.get("format", "gltf"),
             up=item.get("up"),
+            record=item.get("record"),
+            license=item.get("license"),
+            alt_text=item.get("alt_text"),
             file_size=path.stat().st_size,
             thumbnail_path=f"samples:{thumbnail}" if thumbnail and (settings.samples_dir / thumbnail).is_file() else None,
         )

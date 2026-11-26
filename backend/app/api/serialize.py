@@ -1,8 +1,10 @@
+import hashlib
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Annotation, CollectionObject, Job, User
-from app.schemas.object import AnnotationOut, JobOut, ObjectOut, iso
+from app.schemas.object import OPEN_LICENSES, AnnotationOut, JobOut, ObjectOut, iso
 
 API = "/api/v1"
 
@@ -10,14 +12,23 @@ API = "/api/v1"
 def object_out(db: Session, obj: CollectionObject) -> ObjectOut:
     job_id = db.scalar(select(func.max(Job.id)).where(Job.object_id == obj.id))
     annotations = db.scalar(select(func.count(Annotation.id)).where(Annotation.object_id == obj.id)) or 0
-    version = int(obj.updated_at.timestamp())  # Changes when the file changes, so caches refresh.
+    # The model URL changes only when the model file does (a new path or size), so editing the
+    # details or the cover never makes the viewer download the model again. The cover changes with
+    # every edit, which is cheap. Both files are also revalidated with an ETag on every request.
+    model_version = hashlib.sha1(f"{obj.model_path}|{obj.file_size}".encode()).hexdigest()[:10]
+    version = int(obj.updated_at.timestamp())
     return ObjectOut(
         id=obj.id,
         title=obj.title,
         description=obj.description,
         tags=list(obj.tags or []),
+        record=dict(obj.record or {}),
+        license=obj.license,
+        downloadable=obj.license in OPEN_LICENSES and obj.model_path is not None,
+        alt_text=obj.alt_text,
+        visits=obj.visits or 0,
         status=obj.status,
-        model_url=f"{API}/objects/{obj.id}/model?v={version}" if obj.model_path else None,
+        model_url=f"{API}/objects/{obj.id}/model?v={model_version}" if obj.model_path else None,
         model_format=obj.model_format,
         up=obj.up,
         dimensions_mm=obj.dimensions_mm,
@@ -41,6 +52,8 @@ def annotation_out(db: Session, annotation: Annotation) -> AnnotationOut:
         normal=annotation.normal,
         title=annotation.title,
         text=annotation.text,
+        category=annotation.category or "note",
+        severity=annotation.severity,
         author=(author.display_name or author.login) if author else None,
         created_at=iso(annotation.created_at),
         updated_at=iso(annotation.updated_at),

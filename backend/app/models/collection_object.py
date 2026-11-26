@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, ForeignKey, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database.base import Base, utcnow
@@ -28,6 +28,13 @@ class CollectionObject(Base):
     thumbnail_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # True when the model is the sample scan published by the demo pipeline, not the uploaded photos.
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The museum record: accession number, maker, date, place, material, credit line, provenance.
+    record: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
+    # A key of LICENSES in app.schemas.object; None means the rights are not stated yet.
+    license: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # Text alternative for screen readers (WCAG 1.1.1): what the model shows, in a sentence or two.
+    alt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    visits: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)

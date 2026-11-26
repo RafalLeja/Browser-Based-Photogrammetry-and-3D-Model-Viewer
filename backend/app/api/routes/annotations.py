@@ -38,8 +38,10 @@ def update_annotation(annotation_id: int, body: AnnotationPatch, db: Db, _: Cura
     if annotation is None:
         raise HTTPException(status_code=404, detail="Annotation not found.")
     for field, value in body.model_dump(exclude_unset=True).items():
-        if value is not None:
+        if value is not None or field == "severity":  # null clears the severity, nothing else
             setattr(annotation, field, value)
+    if annotation.category != "damage":
+        annotation.severity = None
     annotation.updated_at = utcnow()
     db.commit()
     return annotation_out(db, annotation)

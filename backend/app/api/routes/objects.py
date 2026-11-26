@@ -1,3 +1,4 @@
+import re
 import shutil
 from collections import Counter
 from pathlib import Path
@@ -5,13 +6,13 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 
-from app.api.deps import Curator, Db, OptionalUser, SettingsDep
+from app.api.deps import Curator, Db, OptionalUser, SettingsDep, client_ip
 from app.api.serialize import object_out
 from app.database.base import utcnow
 from app.models import CollectionObject, Job
-from app.schemas.object import ObjectOut, ObjectPage, ObjectPatch, TagCount
+from app.schemas.object import OPEN_LICENSES, ObjectOut, ObjectPage, ObjectPatch, TagCount, stored_record
 from app.services.files import is_sample, owned_folder, resolve
 from app.services.photos import sniff
 
@@ -43,7 +44,8 @@ def cached_file(request: Request, path: Path, media_type: str | None = None) -> 
 
 
 def matches(obj: CollectionObject, query: str) -> bool:
-    haystack = " ".join([obj.title, obj.description, *(obj.tags or [])]).lower()
+    # The record is searched too: staff look objects up by accession number, maker or material.
+    haystack = " ".join([obj.title, obj.description, *(obj.tags or []), *(obj.record or {}).values()]).lower()
     return all(word in haystack for word in query.lower().split())
 
 
@@ -103,7 +105,7 @@ def update_object(object_id: int, body: ObjectPatch, db: Db, _: Curator) -> Obje
     for field, value in body.model_dump(exclude_unset=True).items():
         if value is None and field in ("title", "description", "tags"):
             continue  # These are never empty: null means "leave as is".
-        setattr(obj, field, value)
+        setattr(obj, field, stored_record(value) if field == "record" else value)
     obj.updated_at = utcnow()
     db.commit()
     return object_out(db, obj)
@@ -141,6 +143,30 @@ def get_model(object_id: int, request: Request, db: Db, user: OptionalUser, sett
         raise HTTPException(status_code=404, detail="The model file is missing.")
     media = "model/gltf-binary" if path.suffix == ".glb" else "application/octet-stream"
     return cached_file(request, path, media)
+
+
+@router.get("/{object_id}/download")
+def download_model(object_id: int, request: Request, db: Db, user: OptionalUser, settings: SettingsDep) -> Response:
+    """The model file as an attachment. Visitors may download only openly licensed models."""
+    obj = get_visible(db, object_id, user)
+    if user is None and obj.license not in OPEN_LICENSES:
+        raise HTTPException(status_code=403, detail="The rights holder has not allowed downloads of this model.")
+    if not obj.model_path:
+        raise HTTPException(status_code=404, detail="This object has no model yet.")
+    path = resolve(settings, obj.model_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="The model file is missing.")
+    slug = re.sub(r"[^a-z0-9]+", "-", obj.title.lower()).strip("-") or f"object-{obj.id}"
+    return FileResponse(path, filename=f"{slug}{path.suffix}", media_type="application/octet-stream")
+
+
+@router.post("/{object_id}/visit", status_code=204)
+def record_visit(object_id: int, request: Request, db: Db, user: OptionalUser) -> None:
+    """Counts a visitor opening the object; the same visitor counts once per half hour, curators never."""
+    obj = get_visible(db, object_id, user)
+    if user is None and request.app.state.visit_limiter.allow(f"{client_ip(request)}:{obj.id}"):
+        db.execute(update(CollectionObject).where(CollectionObject.id == obj.id).values(visits=CollectionObject.visits + 1))
+        db.commit()
 
 
 @router.get("/{object_id}/thumbnail")
