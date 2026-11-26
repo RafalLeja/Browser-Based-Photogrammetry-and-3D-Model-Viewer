@@ -220,3 +220,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Runtime data: database, uploaded photos, reconstructed models
+backend/storage/
+backend/storage-e2e/
