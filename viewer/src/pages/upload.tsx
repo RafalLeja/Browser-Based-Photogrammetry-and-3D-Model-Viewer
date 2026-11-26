@@ -1,326 +1,264 @@
-import React, { useState, useRef } from 'react';
-import './upload.css';
-import { Link, Routes } from 'react-router';
+// New scan: pick or drop photos (or a zip), check them in the browser, upload with progress,
+// then follow the reconstruction on the job page.
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { api, uploadPhotos } from '../api';
+import { Icon } from '../components/icon';
+import { Notice, useAsync, useDocumentTitle } from '../components/ui';
+import { formatBytes } from '../lib/format';
+import { DEFAULT_LIMITS, coverageLevel, isZip, readyToUpload, selectPhotos } from '../lib/photos';
 
-interface PipelineJob {
-  id: string;
-  objectName: string;
-  folderName: string;
-  photoCount: number;
-  step: string;
-  stepLabel: string;
-  progress: number;
-  createdAt: string;
-  errorMessage?: string;
-}
+const PREVIEW_LIMIT = 48;
 
-interface SSEPayload {
-  step: string;
-  label?: string;
-  progress?: number;
-  error?: string;
+const COVERAGE: Record<number, { label: string; color: string }> = {
+  0: { label: 'Not enough photos yet', color: 'var(--danger)' },
+  1: { label: 'Workable: 20 or more photos give a fuller model', color: 'var(--warning)' },
+  2: { label: 'Good coverage', color: 'var(--success)' },
+  3: { label: 'Great coverage', color: 'var(--success)' },
+};
+
+function Preview({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (isZip(file)) return;
+    const objectUrl = URL.createObjectURL(file);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [file]);
+  return (
+    <div className="thumb">
+      {url ? <img src={url} alt="" loading="lazy" decoding="async" /> : <div className="thumb-file">{file.name}</div>}
+      <button type="button" aria-label={`Remove ${file.name}`} onClick={onRemove}>
+        <Icon name="x" />
+      </button>
+    </div>
+  );
 }
 
 export function Upload() {
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [folderName, setFolderName] = useState<string>('');
-  const [objectName, setObjectName] = useState<string>('');
-  const [jobs, setJobs] = useState<PipelineJob[]>([]);
-  const [filter, setFilter] = useState<'ALL' | 'ACTIVE' | 'COMPLETED'>('ALL');
-  const [isUploading, setIsUploading] = useState(false);
+  useDocumentTitle('New scan');
+  const navigate = useNavigate();
+  const pipeline = useAsync(() => api.pipeline(), []);
+  const limits = pipeline.data?.limits ?? DEFAULT_LIMITS;
+  const [files, setFiles] = useState<File[]>([]);
+  const [rejected, setRejected] = useState<{ name: string; reason: string }[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [error, setError] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<(() => void) | null>(null);
 
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const selection = useMemo(() => selectPhotos([], files, limits), [files, limits]);
+  const ready = readyToUpload(selection, limits);
+  const level = coverageLevel(selection.photoCount + (selection.zipCount ? 30 : 0));
 
-  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
+  useEffect(() => () => abortRef.current?.(), []); // Leaving the page cancels an upload in flight.
 
-    const allFiles = Array.from(e.target.files);
+  function add(incoming: File[]) {
+    const next = selectPhotos(files, incoming, limits);
+    setFiles(next.accepted);
+    setRejected(next.rejected.map(({ file, reason }) => ({ name: file.name, reason })));
+    setError('');
+  }
 
-    const imageFiles = allFiles.filter((file) =>
-      file.type.startsWith('image/') || /\.(jpg|jpeg|png|tif|tiff)$/i.test(file.name)
+  function onDrop(event: DragEvent) {
+    event.preventDefault();
+    setDragging(false);
+    add([...event.dataTransfer.files]);
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!ready.ok) return;
+    const data = new FormData(event.currentTarget);
+    const height = Number(data.get('height'));
+    setError('');
+    setProgress(0);
+    const upload = uploadPhotos(
+      {
+        title: String(data.get('title') ?? ''),
+        description: String(data.get('description') ?? ''),
+        tags: String(data.get('tags') ?? ''),
+        realHeightMm: height > 0 ? height : undefined,
+      },
+      files,
+      setProgress,
     );
-
-    if (imageFiles.length > 0) {
-      const relativePath = imageFiles[0].webkitRelativePath;
-      const extractedFolder = relativePath ? relativePath.split('/')[0] : 'Selected Folder';
-
-      setFolderName(extractedFolder);
-      setSelectedFiles(imageFiles);
-
-      if (!objectName) {
-        setObjectName(extractedFolder);
-      }
-    }
-  };
-
-
-  const createInitialJob = (
-    objectNameInput: string,
-    folderName: string,
-    photoCount: number
-  ): PipelineJob => {
-    const jobId = `JOB #${Math.floor(100 + Math.random() * 900)}`;
-    const resolvedName = objectNameInput.trim() || folderName || 'Untitled Object';
-
-    return {
-      id: jobId,
-      objectName: resolvedName,
-      folderName,
-      photoCount,
-      step: 'INIT',
-      stepLabel: 'Starting...',
-      progress: 0,
-      createdAt: 'just now',
-    };
-  };
-
-  const buildPipelineFormData = (objectName: string, files: File[]): FormData => {
-    const formData = new FormData();
-    formData.append('object_name', objectName);
-    files.forEach((file) => {
-      formData.append('files', file, file.name);
-    });
-    return formData;
-  };
-
-  const parseSSELine = (line: string): SSEPayload | null => {
-    if (!line.startsWith('data: ')) return null;
-
-    const rawData = line.replace('data: ', '').trim();
-    if (!rawData) return null;
-
+    abortRef.current = upload.abort;
     try {
-      return JSON.parse(rawData) as SSEPayload;
-    } catch {
-      return { step: rawData, label: rawData };
+      const result = await upload.promise;
+      abortRef.current = null;
+      navigate(`/jobs/${result.job.id}`);
+    } catch (err) {
+      abortRef.current = null;
+      setProgress(null);
+      setError(err instanceof Error ? err.message : String(err));
     }
-  };
+  }
 
-
-  const streamPipelineStatus = async (
-    body: ReadableStream<Uint8Array>,
-    jobId: string,
-    onStatusUpdate: (jobId: string, payload: SSEPayload) => void
-  ) => {
-    const reader = body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-
-      for (const line of lines) {
-        const parsed = parseSSELine(line.trim());
-        if (parsed) {
-          onStatusUpdate(jobId, parsed);
-        }
-      }
-    }
-  };
-
-  const resetForm = () => {
-    setSelectedFiles([]);
-    setFolderName('');
-    setObjectName('');
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-
-  const handleStartPipeline = async () => {
-    if (selectedFiles.length === 0) return;
-
-    setIsUploading(true);
-
-    const newJob = createInitialJob(objectName, folderName, selectedFiles.length);
-    const formData = buildPipelineFormData(newJob.objectName, selectedFiles);
-
-    setJobs((prev) => [newJob, ...prev]);
-    resetForm();
-
-    try {
-      const response = await fetch('http://localhost:8000/api/pipeline/start', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok || !response.body) {
-        throw new Error(`Server error: ${response.statusText}`);
-      }
-
-      await streamPipelineStatus(response.body, newJob.id, updateJobStatus);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Pipeline connection failed';
-      updateJobStatus(newJob.id, { step: 'ERROR', label: 'Failed', progress: 0, error: message });
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  const updateJobStatus = (jobId: string, payload: SSEPayload) => {
-    setJobs((previousJobs) =>
-      previousJobs.map((job) => {
-        if (job.id !== jobId) return job;
-
-        return {
-          ...job,
-          step: payload.step,
-          stepLabel: payload.label ?? payload.step,
-          progress: payload.progress ?? job.progress,
-          errorMessage: payload.error,
-        };
-      })
-    );
-  };
-
-  const filteredJobs = jobs.filter((job) => {
-    if (filter === 'ACTIVE') return job.step !== 'FINISHED' && job.step !== 'ERROR';
-    if (filter === 'COMPLETED') return job.step === 'FINISHED';
-    return true;
-  });
+  const uploading = progress !== null;
 
   return (
-    <div className="upload-page">
-      <header className="upload-header">
-        <small className="eyebrow">DIGITAL COLLECTIONS LAB</small>
-        <h1>Photogrammetry pipeline</h1>
-        <p>Create high-fidelity 3D records from your image folder and monitor each stage of reconstruction.</p>
-      </header>
+    <div className="page">
+      <div className="container">
+        <header className="page-head">
+          <p className="eyebrow">New scan</p>
+          <h1 className="page-title">Turn photos into a model.</h1>
+          <p className="page-lede">
+            Add 30 to 80 sharp, overlapping photos taken all around the object. New to this? Read the <Link to="/guide">capture guide</Link> first.
+          </p>
+        </header>
 
-      <section className="upload-section">
-        <h2>1. Upload image folder</h2>
-        <p>Select a folder containing a complete photo set for a single collection object.</p>
-
-        <div className="upload-grid">
-          <div className="dropzone">
-            <p>Choose a folder with photos from your computer</p>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              // @ts-expect-error 
-              webkitdirectory="true"
-              directory="true"
-              multiple
-              onChange={handleFolderSelect}
-              hidden
-            />
-
-            <button
-              type="button"
-              className="btn-browse"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
+        <form className="create-layout" onSubmit={submit}>
+          <div>
+            <div
+              className="dropzone"
+              data-dragging={dragging || undefined}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={onDrop}
             >
-              Browse folder
-            </button>
-            <p className="hint-text">JPG or PNG inside folder supported</p>
-          </div>
-
-          <div className="upload-controls">
-            <div className="form-group">
-              <label htmlFor="objectName">OBJECT NAME</label>
+              <span className="dropzone-icon">
+                <Icon name="upload" />
+              </span>
+              <h2>Drop photos here</h2>
+              <p className="muted">JPEG or PNG photos, or a zip of them · up to {limits.max_photo_mb} MB per photo</p>
+              <div className="row" style={{ justifyContent: 'center' }}>
+                <button type="button" className="btn btn-sm" onClick={() => fileInput.current?.click()} disabled={uploading}>
+                  Choose photos
+                </button>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => folderInput.current?.click()} disabled={uploading}>
+                  <Icon name="folder" /> Choose a folder
+                </button>
+              </div>
               <input
-                id="objectName"
-                type="text"
-                placeholder="e.g. Ceramic vessel"
-                value={objectName}
-                onChange={(e) => setObjectName(e.target.value)}
+                ref={fileInput}
+                type="file"
+                multiple
+                accept="image/jpeg,image/png,.zip,application/zip"
+                hidden
+                onChange={(event) => {
+                  add([...(event.target.files ?? [])]);
+                  event.target.value = '';
+                }}
+              />
+              <input
+                ref={folderInput}
+                type="file"
+                hidden
+                // Chromium, Firefox and Safari all support picking a whole folder this way.
+                {...{ webkitdirectory: '' }}
+                onChange={(event) => {
+                  add([...(event.target.files ?? [])]);
+                  event.target.value = '';
+                }}
               />
             </div>
 
-            <div className="form-group">
-              <span className="label-text">SELECTED FOLDER</span>
-              <div className="selected-box">
-                {selectedFiles.length > 0 ? (
-                  <div>
-                    <strong>📁 {folderName}</strong>
-                    <div>{selectedFiles.length} photos ready</div>
-                  </div>
-                ) : (
-                  <span className="empty-text">No folder selected</span>
-                )}
+            {rejected.length ? (
+              <div style={{ marginTop: 16 }}>
+                <Notice kind="warning">
+                  <strong>
+                    {rejected.length} {rejected.length === 1 ? 'file was' : 'files were'} skipped
+                  </strong>
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                    {rejected.slice(0, 5).map((r) => (
+                      <li key={r.name}>
+                        {r.name}: {r.reason}
+                      </li>
+                    ))}
+                    {rejected.length > 5 ? <li>and {rejected.length - 5} more</li> : null}
+                  </ul>
+                </Notice>
+              </div>
+            ) : null}
+
+            {files.length ? (
+              <>
+                <div className="row row-between" style={{ marginTop: 24 }}>
+                  <strong>
+                    {selection.photoCount} {selection.photoCount === 1 ? 'photo' : 'photos'}
+                    {selection.zipCount ? ` + ${selection.zipCount} zip` : ''} · {formatBytes(selection.totalBytes)}
+                  </strong>
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => setFiles([])} disabled={uploading}>
+                    Remove all
+                  </button>
+                </div>
+                <div className="thumbs">
+                  {files.slice(0, PREVIEW_LIMIT).map((file) => (
+                    <Preview key={`${file.name}:${file.size}`} file={file} onRemove={() => setFiles((list) => list.filter((f) => f !== file))} />
+                  ))}
+                </div>
+                {files.length > PREVIEW_LIMIT ? <p className="muted" style={{ marginTop: 8, fontSize: 14 }}>and {files.length - PREVIEW_LIMIT} more</p> : null}
+              </>
+            ) : null}
+          </div>
+
+          <div className="card-panel">
+            <div className="field">
+              <label htmlFor="title">Object name</label>
+              <input id="title" name="title" className="input" required maxLength={120} placeholder="e.g. Bronze figurine" disabled={uploading} />
+            </div>
+            <div className="field">
+              <label htmlFor="description">Description</label>
+              <textarea id="description" name="description" className="textarea" maxLength={4000} rows={3} placeholder="What it is, where it comes from" disabled={uploading} />
+            </div>
+            <div className="field">
+              <label htmlFor="tags">Tags</label>
+              <input id="tags" name="tags" className="input" placeholder="sculpture, bronze" disabled={uploading} />
+              <span className="hint">Separate tags with commas.</span>
+            </div>
+            <div className="field">
+              <label htmlFor="height">Real height in millimetres</label>
+              <input id="height" name="height" className="input" type="number" min={1} max={100000} step="any" inputMode="decimal" placeholder="Optional" disabled={uploading} />
+              <span className="hint">Makes the model true to scale, so the ruler shows real millimetres.</span>
+            </div>
+
+            <div className="quality" aria-live="polite">
+              <div className="row row-between">
+                <span className="label">Coverage</span>
+                <span className="muted">{COVERAGE[level].label}</span>
+              </div>
+              <div className="quality-bar" data-level={level} style={{ ['--quality-color' as string]: COVERAGE[level].color }}>
+                <span />
+                <span />
+                <span />
               </div>
             </div>
 
-            <button
-              type="button"
-              className="btn-start"
-              onClick={handleStartPipeline}
-              disabled={selectedFiles.length === 0 || isUploading}
-            >
-              {isUploading ? 'Uploading...' : 'Start pipeline →'}
-            </button>
-          </div>
-        </div>
-      </section>
+            {pipeline.data?.mode === 'demo' ? (
+              <Notice kind="warning">
+                <strong>Demo mode.</strong> {pipeline.data.reason[0].toUpperCase() + pipeline.data.reason.slice(1)}. Your photos are stored, and a sample scan is published so you can try the whole flow.
+              </Notice>
+            ) : null}
+            {error ? <Notice kind="danger">{error}</Notice> : null}
 
-      <section className="jobs-section">
-        <div className="jobs-header">
-          <div>
-            <h2>2. Job status (Pipeline view)</h2>
-            <small>{jobs.filter((j) => j.step !== 'FINISHED').length} active jobs</small>
-          </div>
-
-          <div className="filter-tabs">
-            <button onClick={() => setFilter('ALL')} disabled={filter === 'ALL'}>All</button>
-            <button onClick={() => setFilter('ACTIVE')} disabled={filter === 'ACTIVE'}>Active</button>
-            <button onClick={() => setFilter('COMPLETED')} disabled={filter === 'COMPLETED'}>Completed</button>
-          </div>
-
-          {jobs.some((job) => job.step === 'FINISHED') && (
-            <nav className="navigation">
-              <Link to="/viewer" className="nav-btn">
-                Show Model
-              </Link>
-            </nav>
-          )}
-        </div>
-
-        <div className="jobs-list">
-          {filteredJobs.length === 0 && (
-            <p className="empty-jobs">
-              No pipeline jobs running yet. Select a folder above to start.
-            </p>
-          )}
-
-          {filteredJobs.map((job) => (
-            <div key={job.id} className="job-card">
-              <div className="job-info">
-                <div className="job-meta">
-                  {job.id} • {job.photoCount} photos ({job.folderName})
+            {uploading ? (
+              <div className="group">
+                <div className="row row-between" style={{ fontSize: 14 }}>
+                  <span>Uploading…</span>
+                  <span className="muted">{Math.round((progress ?? 0) * 100)}%</span>
                 </div>
-                <strong className="job-title">{job.objectName}</strong>
-              </div>
-
-              <div className="job-progress-wrapper">
-                <div className="job-status-row">
-                  <span>
-                    ● <strong>{job.stepLabel}</strong> ({job.step})
-                  </span>
-                  <span>{job.progress}%</span>
+                <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((progress ?? 0) * 100)}>
+                  <span style={{ width: `${(progress ?? 0) * 100}%` }} />
                 </div>
-
-                <progress value={job.progress} max={100} />
-
-                {job.errorMessage && (
-                  <div className="job-error">
-                    Error: {job.errorMessage}
-                  </div>
-                )}
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => abortRef.current?.()}>
+                  Cancel upload
+                </button>
               </div>
-
-              <div className="job-time">{job.createdAt}</div>
-            </div>
-          ))}
-        </div>
-      </section>
+            ) : (
+              <button type="submit" className="btn btn-block" disabled={!ready.ok}>
+                Start reconstruction
+              </button>
+            )}
+            {!ready.ok && !uploading ? <p className="hint muted" style={{ fontSize: 13, textAlign: 'center' }}>{ready.reason}</p> : null}
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
