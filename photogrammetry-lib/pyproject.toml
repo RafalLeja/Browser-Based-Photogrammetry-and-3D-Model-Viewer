@@ -1,14 +1,17 @@
 [project]
 name = "photogrammetry-lib"
 version = "0.1.0"
-description = "Add your description here"
+description = "Photos to 3D: COLMAP reconstruction and web-ready mesh post-processing"
 readme = "README.md"
 authors = [
     { email = "rafal@leja.org.pl" }
 ]
 requires-python = ">=3.14"
 dependencies = [
-    "pycolmap>=4.2.1"
+    "numpy>=2.3",
+    "plyfile>=1.1",
+    "pycolmap>=4.2.1",
+    "scipy>=1.16",
 ]
 
 [build-system]
