@@ -1,4 +1,5 @@
-images/
+# The photo sets used for reconstruction (large; only the root folder, not docs/images).
+/images/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -16,8 +17,9 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Root only: viewer/src/lib/ is source code.
+/lib/
+/lib64/
 parts/
 sdist/
 var/

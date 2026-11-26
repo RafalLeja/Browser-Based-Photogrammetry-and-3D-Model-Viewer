@@ -44,10 +44,16 @@ class RateLimiter:
         self.window = window_seconds
         self._hits: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
+        self._last_prune = time.monotonic()
 
     def allow(self, key: str) -> bool:
         now = time.monotonic()
         with self._lock:
+            if now - self._last_prune > self.window:
+                # Keys whose hits have all expired are dropped, so one entry per visitor never piles up.
+                for stale in [k for k, h in self._hits.items() if not h or now - h[-1] > self.window]:
+                    del self._hits[stale]
+                self._last_prune = now
             hits = self._hits.setdefault(key, deque())
             while hits and now - hits[0] > self.window:
                 hits.popleft()

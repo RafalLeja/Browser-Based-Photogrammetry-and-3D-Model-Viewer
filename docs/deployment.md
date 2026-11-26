@@ -32,6 +32,10 @@ On a workstation without containers, the simplest path is to run the API directl
 - Put the stack behind TLS (a reverse proxy such as Caddy or Traefik, or nginx with certificates)
   and set `COOKIE_SECURE=true`.
 - Set `CORS_ORIGINS` to the public origin.
+- Rate limits count requests per visitor address. nginx passes the address on in
+  `X-Forwarded-For` (replacing any value the client sent) and the API trusts it, because only
+  nginx can reach the API container. If another proxy terminates TLS in front of nginx, enable
+  nginx's `real_ip` module for that proxy, or every visitor shares one limit.
 - Choose a strong `CURATOR_PASSWORD` and `DB_PASSWORD`; never commit them.
 - Add Alembic migrations before changing the schema on a database with real data.
 
@@ -40,3 +44,6 @@ On a workstation without containers, the simplest path is to run the API directl
 - Database: `docker compose exec db pg_dump -U vitrine vitrine > vitrine.sql`.
 - Files: back up the `storage` volume (uploads, models, thumbnails). Uploaded photos can be
   deleted after a successful reconstruction if storage is tight; the models are what visitors see.
+- Deleting an object removes its photos, model, cover and COLMAP workspace. A successful run
+  deletes its COLMAP workspace (`~/.bbpa3mv/storage/<hash>`, often several GB); a failed run
+  keeps it, so Retry resumes where it stopped.

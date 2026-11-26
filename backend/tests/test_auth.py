@@ -44,3 +44,15 @@ def test_writes_need_a_login(client: TestClient) -> None:
     assert client.patch("/api/v1/objects/1", json={"title": "x"}).status_code == 401
     assert client.post("/api/v1/uploads", data={"title": "x"}).status_code in (401, 422)
     assert client.get("/api/v1/jobs").status_code == 401
+
+
+def test_rate_limiter_forgets_visitors_whose_hits_expired() -> None:
+    import time
+
+    from app.core.security import RateLimiter
+
+    limiter = RateLimiter(limit=5, window_seconds=0.05)
+    assert limiter.allow("1.2.3.4") and limiter.allow("5.6.7.8")
+    time.sleep(0.1)
+    assert limiter.allow("9.9.9.9")
+    assert set(limiter._hits) == {"9.9.9.9"}  # The two expired visitors no longer take memory.

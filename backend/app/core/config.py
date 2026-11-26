@@ -46,7 +46,8 @@ class Settings:
     pipeline: str = "auto"
     embedded_worker: bool = True
     demo_stage_seconds: float = 1.5
-    demo_model: str = "models/eagle.glb"
+    # The cleaned, upright 2.2 MB eagle: what the real pipeline would publish.
+    demo_model: str = "models/eagle-web.glb"
     session_days: int = 14
     cookie_secure: bool = False
     curator_login: str | None = None

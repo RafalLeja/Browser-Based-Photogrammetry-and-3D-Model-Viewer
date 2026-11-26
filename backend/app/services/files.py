@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from photogrammetry_lib.storage import STORAGE_DIR as WORKSPACES  # a path constant; pycolmap is not loaded
+
 from app.core.config import Settings
 
 SAMPLES_PREFIX = "samples:"
@@ -19,3 +21,10 @@ def resolve(settings: Settings, stored: str) -> Path:
 
 def is_sample(stored: str | None) -> bool:
     return bool(stored) and stored.startswith(SAMPLES_PREFIX)
+
+
+def owned_folder(settings: Settings, folder: Path) -> bool:
+    """Whether `folder` is one we created and may delete: inside the storage dir or COLMAP's workspaces."""
+    folder = folder.resolve()
+    roots = (settings.storage_dir.resolve(), WORKSPACES.resolve())
+    return any(folder != root and folder.is_relative_to(root) for root in roots)

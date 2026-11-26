@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, type CollectionObject, type ObjectQuery } from '../api';
 import { useAuth } from '../auth';
@@ -82,14 +82,27 @@ export function Gallery() {
   const status = (params.get('status') as ObjectQuery['status']) ?? 'ready';
   const page = Number(params.get('page') ?? '1') || 1;
   const [draft, setDraft] = useState(q);
+  const pushed = useRef(q);
 
   // Typing updates the URL after a short pause, so results are shareable and the back button works.
   useEffect(() => {
     if (draft === q) return;
-    const id = setTimeout(() => update({ q: draft, page: '' }), 250);
+    const id = setTimeout(() => {
+      pushed.current = draft;
+      update({ q: draft, page: '' });
+    }, 250);
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
+
+  // Back, forward or a link changed the search: the box follows. Our own updates are skipped, so
+  // letters typed meanwhile are not overwritten.
+  useEffect(() => {
+    if (q !== pushed.current) {
+      pushed.current = q;
+      setDraft(q);
+    }
+  }, [q]);
 
   function update(changes: Record<string, string>) {
     const next = new URLSearchParams(params);

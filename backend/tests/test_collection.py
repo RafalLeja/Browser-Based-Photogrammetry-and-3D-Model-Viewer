@@ -118,3 +118,46 @@ def test_model_downloads_revalidate_with_an_etag(curator: TestClient, worker: Wo
     assert first.status_code == 200 and first.headers["cache-control"] == "public, no-cache"
     again = curator.get(url, headers={"If-None-Match": first.headers["etag"]})
     assert again.status_code == 304 and again.content == b""
+
+
+def test_delete_also_removes_the_photos_and_workspace_but_nothing_outside(
+    curator: TestClient, worker: Worker, settings, tmp_path, monkeypatch  # noqa: ANN001
+) -> None:
+    from pathlib import Path
+
+    from app.models import Job
+
+    monkeypatch.setattr("app.services.files.WORKSPACES", tmp_path / "workspaces")
+    body = upload(curator, title="Vase")
+    worker.run_once()
+    workspace = tmp_path / "workspaces" / "abc"
+    workspace.mkdir(parents=True)
+    outside = tmp_path / "not-ours"
+    outside.mkdir()
+    with curator.app.state.sessionmaker() as db:
+        job = db.get(Job, body["job"]["id"])
+        photos_dir = Path(job.input_path)
+        job.options = {"workspace": str(workspace)}
+        db.add(Job(object_id=body["object"]["id"], input_path=str(outside)))  # A path we never created.
+        db.commit()
+    assert photos_dir.is_dir() and any(photos_dir.iterdir())
+
+    assert curator.delete(f"/api/v1/objects/{body['object']['id']}").status_code == 204
+    assert not photos_dir.exists()
+    assert not workspace.exists()
+    assert outside.is_dir()
+
+
+def test_a_new_cover_in_another_format_replaces_the_old_file(curator: TestClient, worker: Worker, settings) -> None:  # noqa: ANN001
+    object_id = publish(curator, worker, "Vase")
+    curator.put(f"/api/v1/objects/{object_id}/thumbnail", content=PNG)
+    webp = b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"\x00" * 32
+    assert curator.put(f"/api/v1/objects/{object_id}/thumbnail", content=webp).status_code == 200
+    assert sorted(p.name for p in (settings.storage_dir / "thumbnails").iterdir()) == [f"{object_id}.webp"]
+
+
+def test_the_default_demo_model_is_the_small_upright_sample() -> None:
+    from app.core.config import REPO_ROOT, Settings
+
+    assert Settings().demo_model == "models/eagle-web.glb"
+    assert (REPO_ROOT / "samples" / Settings().demo_model).is_file()

@@ -8,17 +8,9 @@ import type { EnvironmentOptions, Measurement, ModelInfo, Pin, SectionAxis, Tool
 import { Icon, type IconName } from '../components/icon';
 import { ModelStage } from '../components/model-stage';
 import { ConfirmDialog, Dialog, EmptyState, ErrorState, useAsync, useDocumentTitle, useInterval, useToast } from '../components/ui';
-import { formatCount } from '../lib/format';
-import {
-  DEFAULT_LIGHT,
-  LightPanel,
-  MeasurePanel,
-  NotesPanel,
-  OverviewPanel,
-  lightDirection,
-  type DraftPin,
-  type LightState,
-} from './object-panels';
+import { escapeHtml, formatCount } from '../lib/format';
+import { DEFAULT_LIGHT, lightDirection, sharedLight, type LightState } from '../lib/light';
+import { LightPanel, MeasurePanel, NotesPanel, OverviewPanel, type DraftPin } from './object-panels';
 
 const STUDIO_HDR = `${import.meta.env.BASE_URL}hdr/studio_small_09_1k.hdr`;
 const TOUR_STEP_MS = 4500;
@@ -35,7 +27,7 @@ export function applyLight(viewer: Viewer, light: LightState, previous: LightSta
   }
   viewer.setLighting({
     exposure: light.exposure,
-    keyLight: { intensity: light.intensity, direction: lightDirection(light.azimuth) },
+    keyLight: { intensity: light.intensity, direction: lightDirection(light.azimuth, light.elevation) },
     groundShadow: { opacity: light.shadow },
   });
 }
@@ -149,13 +141,7 @@ export function ViewerPage() {
       ({ state }) => {
         if (!current) return;
         viewer.setView({ position: state.position, target: state.target }, { animate: false });
-        setLight((l) => ({
-          ...l,
-          environment: state.environment ?? l.environment,
-          exposure: state.exposure ?? l.exposure,
-          intensity: state.light_intensity ?? l.intensity,
-          background: state.background ?? l.background,
-        }));
+        setLight((l) => sharedLight(state, l));
       },
       () => toast('That shared view no longer exists.', 'alert'),
     );
@@ -268,7 +254,7 @@ export function ViewerPage() {
       environment: light.environment,
       exposure: light.exposure,
       light_intensity: light.intensity,
-      light_direction: lightDirection(light.azimuth),
+      light_direction: lightDirection(light.azimuth, light.elevation),
       background: light.background,
     };
     try {
@@ -276,7 +262,7 @@ export function ViewerPage() {
       const origin = location.origin;
       setShareLink({
         url: `${origin}/objects/${objectId}?view=${view.id}`,
-        embed: `<iframe src="${origin}/embed/${objectId}?view=${view.id}" title="${object.data?.title ?? '3D model'}" width="800" height="600" style="border:0;border-radius:12px" allow="fullscreen" loading="lazy"></iframe>`,
+        embed: `<iframe src="${origin}/embed/${objectId}?view=${view.id}" title="${escapeHtml(object.data?.title ?? '3D model')}" width="800" height="600" style="border:0;border-radius:12px" allow="fullscreen" loading="lazy"></iframe>`,
       });
     } catch (err) {
       setShareOpen(false);

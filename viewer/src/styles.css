@@ -1291,6 +1291,7 @@ textarea {
 
 .card {
   display: grid;
+  align-content: start; /* A taller card in the same row must not push this card's title down. */
   gap: 14px;
   color: var(--text);
   border-radius: var(--radius);
@@ -1514,6 +1515,20 @@ textarea {
   z-index: 5;
   transform: translateX(-50%);
   white-space: nowrap;
+}
+
+.zoom-hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--base) var(--ease);
+}
+
+.zoom-hint[data-shown] {
+  opacity: 1;
 }
 
 .stage-loading {

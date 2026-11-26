@@ -9,7 +9,7 @@ import { Icon } from '../components/icon';
 import { ModelStage } from '../components/model-stage';
 import { EmptyState, Notice, useAsync, useDocumentTitle } from '../components/ui';
 import { safeNext } from '../lib/format';
-import { DEFAULT_LIGHT } from './object-panels';
+import { DEFAULT_LIGHT, sharedLight } from '../lib/light';
 import { applyLight, environmentOptions } from './viewerpage';
 
 export function Login() {
@@ -84,7 +84,7 @@ export function Embed() {
     if (!viewer || !loaded || !viewId) return;
     api.view(viewId).then(({ state }) => {
       viewer.setView({ position: state.position, target: state.target }, { animate: false });
-      applyLight(viewer, { ...DEFAULT_LIGHT, environment: state.environment ?? 'studio', exposure: state.exposure ?? 1, intensity: state.light_intensity ?? 1, background: state.background ?? false }, DEFAULT_LIGHT);
+      applyLight(viewer, sharedLight(state, DEFAULT_LIGHT), DEFAULT_LIGHT);
     }, () => undefined);
   }, [viewer, loaded, viewId]);
 
@@ -102,6 +102,7 @@ export function Embed() {
           label={`3D view of ${data.title}`}
           environment={environmentOptions(DEFAULT_LIGHT)}
           autoRotate={params.get('autorotate') === '1'}
+          cooperative // The host page keeps its scrolling; Ctrl/⌘ + scroll zooms.
           onViewer={setViewer}
           onLoaded={() => setLoaded(true)}
         />

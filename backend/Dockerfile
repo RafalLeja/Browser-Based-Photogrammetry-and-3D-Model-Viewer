@@ -20,4 +20,6 @@ ENV STORAGE_DIR=/data SAMPLES_DIR=/srv/samples
 WORKDIR /srv/backend
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"
-CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+# Only nginx can reach this container, and it replaces X-Forwarded-For with the real client
+# address, so the header is trusted: rate limits then count each visitor, not the proxy.
+CMD ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

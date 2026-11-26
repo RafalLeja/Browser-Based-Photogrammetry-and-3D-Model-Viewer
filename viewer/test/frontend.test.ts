@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { errorMessage } from '../src/api.ts';
-import { formatBytes, formatCount, formatDimensions, formatDuration, formatRelative, initials, safeNext } from '../src/lib/format.ts';
+import { escapeHtml, formatBytes, formatCount, formatDimensions, formatDuration, formatRelative, initials, safeNext } from '../src/lib/format.ts';
+import { DEFAULT_LIGHT, lightAngles, lightDirection, sharedLight } from '../src/lib/light.ts';
 import { stageStates } from '../src/lib/jobs.ts';
 import { coverageLevel, readyToUpload, selectPhotos, type FileLike } from '../src/lib/photos.ts';
 
@@ -85,4 +86,21 @@ test('errorMessage reads FastAPI errors and falls back to plain words', () => {
   assert.equal(errorMessage(422, { detail: [{ loc: ['body', 'title'], msg: 'Field required' }] }), 'title: Field required');
   assert.match(errorMessage(0, null), /Cannot reach the server/);
   assert.match(errorMessage(502, null), /server had a problem/);
+});
+
+test('an embed code cannot be broken or hijacked by a title', () => {
+  assert.equal(escapeHtml('The "Thinker" & <friends>'), 'The &quot;Thinker&quot; &amp; &lt;friends&gt;');
+  assert.equal(escapeHtml(`x" onload="alert(1)`), 'x&quot; onload=&quot;alert(1)');
+  assert.equal(escapeHtml("Rodin's"), 'Rodin&#39;s');
+});
+
+test('a shared link restores the key light direction it saved', () => {
+  for (const [azimuth, elevation] of [[45, 40], [300, 8], [0, 85], [180, 2]]) {
+    assert.deepEqual(lightAngles(lightDirection(azimuth, elevation)), { azimuth, elevation });
+  }
+  const restored = sharedLight({ position: [0, 0, 3], target: [0, 0, 0], light_direction: lightDirection(270, 10), exposure: 1.4 }, DEFAULT_LIGHT);
+  assert.equal(restored.azimuth, 270);
+  assert.equal(restored.elevation, 10);
+  assert.equal(restored.exposure, 1.4);
+  assert.equal(restored.environment, DEFAULT_LIGHT.environment); // Not in the link: kept.
 });

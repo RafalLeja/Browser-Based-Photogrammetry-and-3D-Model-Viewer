@@ -25,6 +25,13 @@ export interface ViewerOptions {
   decoderPath?: string;
   /** Accessible name of the 3D view for screen readers. Default '3D model viewer'. */
   label?: string;
+  /**
+   * Share gestures with the page around the viewer, for a model inside a longer page (a landing
+   * page, an embed): the wheel zooms only with Ctrl or ⌘ held (a trackpad pinch counts), so a
+   * plain scroll moves the page, and on touch screens a vertical swipe scrolls the page while a
+   * sideways swipe turns the model and a pinch zooms. Default false: the viewer owns every gesture.
+   */
+  cooperativeGestures?: boolean;
 }
 
 /**

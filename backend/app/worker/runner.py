@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 CLI_PATH = REPO_ROOT / "photogrammetry-lib" / "cli.py"
 OPTIMIZE_SCRIPT = REPO_ROOT / "viewer" / "scripts" / "optimize-glb.mjs"
 MAX_LOG_CHARS = 64_000
+# A child process's output is saved, and cancellation checked, at most this often: COLMAP prints
+# thousands of lines, and one database write per line would hold up the API's own writes.
+FLUSH_SECONDS = 1.0
+STOP_TIMEOUT_SECONDS = 15
 
 # PhotogrammetryStep names in pipeline order, and the UI stage that follows each one. The CLI
 # reports a step after finishing it, so the next step's stage is what runs now.
@@ -127,6 +131,11 @@ class JobContext:
             self.check_cancel()
             time.sleep(min(left, 0.25))
 
+    def remember(self, **values: object) -> None:
+        """Adds values to the job's options, for example where its working files are."""
+        self.options.update(values)
+        self._update(options=dict(self.options))
+
     def publish(self, model_path: str, *, is_demo: bool, manifest: dict | None = None) -> None:
         manifest = manifest or {}
         with self.sessions() as db:
@@ -169,6 +178,16 @@ def run_demo(ctx: JobContext, reason: str) -> None:
     ctx.publish(f"samples:{ctx.settings.demo_model}", is_demo=True, manifest={"file_size": sample.stat().st_size})
 
 
+def stop_process(process: subprocess.Popen) -> None:
+    """Asks the process to stop, and kills it if it does not within the timeout."""
+    process.terminate()
+    try:
+        process.wait(timeout=STOP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
 def run_process(ctx: JobContext, command: list[str], on_line=None) -> list[str]:  # noqa: ANN001
     process = subprocess.Popen(
         command,
@@ -188,23 +207,30 @@ def run_process(ctx: JobContext, command: list[str], on_line=None) -> list[str]:
 
     threading.Thread(target=pump, daemon=True).start()
     output: list[str] = []
-    while True:
+    batch: list[str] = []
+    next_flush = time.monotonic() + FLUSH_SECONDS
+    finished = False
+    while not finished:
         try:
-            raw = lines.get(timeout=1)
+            raw = lines.get(timeout=max(0.0, next_flush - time.monotonic()))
         except queue.Empty:
-            if ctx.cancelled():
-                process.terminate()
-                process.wait(timeout=30)
-                raise JobCancelled from None
-            continue
+            raw = ""  # Quiet for a moment: time to save and check.
         if raw is None:
-            break
-        line = raw.rstrip()
-        if line:
-            ctx.log(line)
+            finished = True
+        elif line := raw.rstrip():
+            batch.append(line)
             output.append(line)
             if on_line:
                 on_line(line)
+        if finished or time.monotonic() >= next_flush:
+            if batch:
+                ctx.log("\n".join(batch))
+                batch.clear()
+            next_flush = time.monotonic() + FLUSH_SECONDS
+            # Checked on a clock, not only when the output pauses, so a chatty run stops promptly too.
+            if not finished and ctx.cancelled():
+                stop_process(process)
+                raise JobCancelled
     code = process.wait()
     if code != 0:
         last = output[-1] if output else "no output"
@@ -230,6 +256,10 @@ def run_colmap(ctx: JobContext) -> None:
             ctx.stage(next_stage[name])
 
     ctx.stage("upload")
+    # COLMAP's workspace (depth maps, undistorted photos: gigabytes) is recorded, so deleting the
+    # object can remove it, and removed after a successful run. A failed run keeps it to resume.
+    workspace = get_output_directory(ctx.input_dir)
+    ctx.remember(workspace=str(workspace))
     command = [sys.executable, str(CLI_PATH), "--input", str(ctx.input_dir), "--output", str(raw_ply)]
     output = run_process(ctx, command, on_cli_line)
     if any(line.startswith("[error]") for line in output) or not raw_ply.is_file():
@@ -237,7 +267,7 @@ def run_colmap(ctx: JobContext) -> None:
 
     ctx.stage("optimize")
     post = [sys.executable, "-m", "photogrammetry_lib.postprocess", str(raw_ply), str(glb), "--json"]
-    sparse = get_output_directory(ctx.input_dir) / "sparse"
+    sparse = workspace / "sparse"
     if sparse.is_dir():
         post += ["--sparse", str(sparse)]
     if height := ctx.options.get("real_height_mm"):
@@ -255,6 +285,9 @@ def run_colmap(ctx: JobContext) -> None:
 
     ctx.stage("publish")
     ctx.publish(f"models/{ctx.object_id}/model.glb", is_demo=False, manifest=manifest)
+    # shortcut: two uploads of the very same photos share one workspace (it is keyed by content);
+    # removing it here makes the other one start over. Key workspaces by job if that ever matters.
+    shutil.rmtree(workspace, ignore_errors=True)
 
 
 class Worker:

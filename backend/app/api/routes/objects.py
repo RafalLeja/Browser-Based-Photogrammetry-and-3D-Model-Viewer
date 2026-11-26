@@ -1,8 +1,7 @@
 import shutil
 from collections import Counter
-from typing import Literal
-
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
@@ -13,7 +12,7 @@ from app.api.serialize import object_out
 from app.database.base import utcnow
 from app.models import CollectionObject, Job
 from app.schemas.object import ObjectOut, ObjectPage, ObjectPatch, TagCount
-from app.services.files import is_sample, resolve
+from app.services.files import is_sample, owned_folder, resolve
 from app.services.photos import sniff
 
 router = APIRouter(prefix="/objects", tags=["Objects"])
@@ -115,14 +114,19 @@ def delete_object(object_id: int, request: Request, db: Db, settings: SettingsDe
     obj = db.get(CollectionObject, object_id)
     if obj is None:
         raise HTTPException(status_code=404, detail="Object not found.")
+    # The jobs are deleted with the object (ON DELETE CASCADE), so their folders are collected first.
+    # A running job notices that its row is gone at its next check and stops.
+    folders = [settings.storage_dir / "models" / str(object_id)]
     for job in db.scalars(select(Job).where(Job.object_id == object_id)):
-        job.cancel_requested = True  # A running job stops at its next check.
+        folders.append(Path(job.input_path))
+        if workspace := (job.options or {}).get("workspace"):
+            folders.append(Path(workspace))
     db.delete(obj)
     db.commit()
     # Files go after the commit, so a failed delete never leaves an object without its files.
-    folder = settings.storage_dir / "models" / str(object_id)
-    if folder.is_dir():
-        shutil.rmtree(folder, ignore_errors=True)
+    for folder in folders:
+        if owned_folder(settings, folder):
+            shutil.rmtree(folder, ignore_errors=True)
     if obj.thumbnail_path and not is_sample(obj.thumbnail_path):
         resolve(settings, obj.thumbnail_path).unlink(missing_ok=True)
 
@@ -167,6 +171,8 @@ async def put_thumbnail(object_id: int, request: Request, db: Db, settings: Sett
     target = settings.storage_dir / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(body)
+    if obj.thumbnail_path and obj.thumbnail_path != relative and not is_sample(obj.thumbnail_path):
+        resolve(settings, obj.thumbnail_path).unlink(missing_ok=True)  # A cover in another format replaced it.
     obj.thumbnail_path = relative
     obj.updated_at = utcnow()
     db.commit()

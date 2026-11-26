@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import type { Annotation, CollectionObject, EnvironmentName } from '../api';
+import { DEFAULT_LIGHT, type LightState } from '../lib/light';
 import { formatLength } from '../index';
 import type { Measurement, ModelInfo, RendererBackend } from '../index';
 import { Icon } from '../components/icon';
@@ -358,17 +359,6 @@ export function MeasurePanel(props: {
 
 // ---------- Light ----------
 
-export interface LightState {
-  environment: EnvironmentName;
-  exposure: number;
-  intensity: number;
-  azimuth: number;
-  shadow: number;
-  background: boolean;
-}
-
-export const DEFAULT_LIGHT: LightState = { environment: 'studio', exposure: 1, intensity: 1, azimuth: 45, shadow: 0.5, background: false };
-
 const ENVIRONMENTS: { value: EnvironmentName; label: string }[] = [
   { value: 'studio', label: 'Studio' },
   { value: 'outdoor', label: 'Outdoor' },
@@ -428,6 +418,7 @@ export function LightPanel(props: {
         <Slider id="exposure" label="Exposure" value={light.exposure} min={0.2} max={2.5} step={0.05} format={(v) => v.toFixed(2)} onChange={(exposure) => set({ exposure })} />
         <Slider id="intensity" label="Key light" value={light.intensity} min={0} max={5} step={0.1} format={(v) => v.toFixed(1)} onChange={(intensity) => set({ intensity })} />
         <Slider id="azimuth" label="Key light direction" value={light.azimuth} min={0} max={359} step={1} format={(v) => `${v}°`} onChange={(azimuth) => set({ azimuth })} />
+        <Slider id="elevation" label="Key light height" value={light.elevation} min={2} max={88} step={1} format={(v) => `${v}°`} onChange={(elevation) => set({ elevation })} />
         <Slider id="shadow" label="Ground shadow" value={light.shadow} min={0} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} onChange={(shadow) => set({ shadow })} />
       </div>
       <div className="group">
@@ -441,11 +432,4 @@ export function LightPanel(props: {
       </div>
     </>
   );
-}
-
-/** Light coming from `azimuth` degrees around the model, 40 degrees above the horizon. */
-export function lightDirection(azimuth: number): [number, number, number] {
-  const a = (azimuth * Math.PI) / 180;
-  const elevation = (40 * Math.PI) / 180;
-  return [Math.cos(a) * Math.cos(elevation), Math.sin(elevation), Math.sin(a) * Math.cos(elevation)];
 }

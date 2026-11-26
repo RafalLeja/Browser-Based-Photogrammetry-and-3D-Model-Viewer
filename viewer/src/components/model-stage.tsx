@@ -15,6 +15,8 @@ interface Props {
   label: string;
   environment?: EnvironmentOptions;
   autoRotate?: boolean;
+  /** For a model inside a longer page: plain scrolling moves the page, Ctrl/⌘ + scroll zooms. */
+  cooperative?: boolean;
   onViewer?: (viewer: Viewer | null) => void;
   onLoaded?: (info: ModelInfo) => void;
   children?: ReactNode;
@@ -26,7 +28,9 @@ type StageState =
   | { kind: 'ready' }
   | { kind: 'error'; message: string };
 
-export function ModelStage({ url, format, up, trueScale, label, environment, autoRotate, onViewer, onLoaded, children }: Props) {
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent);
+
+export function ModelStage({ url, format, up, trueScale, label, environment, autoRotate, cooperative, onViewer, onLoaded, children }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [state, setState] = useState<StageState>({ kind: 'starting' });
@@ -34,7 +38,9 @@ export function ModelStage({ url, format, up, trueScale, label, environment, aut
   // Kept in refs so changing callbacks never recreate the viewer.
   const callbacks = useRef({ onViewer, onLoaded });
   callbacks.current = { onViewer, onLoaded };
-  const initial = useRef({ environment, label });
+  const initial = useRef({ environment, label, cooperative });
+  const [zoomHint, setZoomHint] = useState(false);
+  const hintTimer = useRef(0);
 
   useEffect(() => {
     const element = host.current;
@@ -45,6 +51,7 @@ export function ModelStage({ url, format, up, trueScale, label, environment, aut
       environment: initial.current.environment ?? { preset: 'studio' },
       decoderPath: `${import.meta.env.BASE_URL}decoders/`,
       label: initial.current.label,
+      cooperativeGestures: initial.current.cooperative,
       forceWebGL: new URLSearchParams(location.search).has('webgl'),
     }).then(
       (instance) => {
@@ -94,6 +101,23 @@ export function ModelStage({ url, format, up, trueScale, label, environment, aut
     viewer?.setAutoRotate(Boolean(autoRotate));
   }, [viewer, autoRotate]);
 
+  // A plain scroll over a cooperative stage moves the page; this says how to zoom instead.
+  useEffect(() => {
+    const element = host.current;
+    if (!cooperative || !element) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) return;
+      setZoomHint(true);
+      clearTimeout(hintTimer.current);
+      hintTimer.current = window.setTimeout(() => setZoomHint(false), 1400);
+    };
+    element.addEventListener('wheel', onWheel, { passive: true });
+    return () => {
+      element.removeEventListener('wheel', onWheel);
+      clearTimeout(hintTimer.current);
+    };
+  }, [cooperative]);
+
   const percent = state.kind === 'loading' && state.total ? Math.round((state.loaded / state.total) * 100) : null;
 
   return (
@@ -124,6 +148,11 @@ export function ModelStage({ url, format, up, trueScale, label, environment, aut
               <Icon name="refresh" /> Try again
             </button>
           ) : null}
+        </div>
+      ) : null}
+      {cooperative ? (
+        <div className="zoom-hint glass glass-pill" data-shown={zoomHint || undefined} aria-hidden="true">
+          {IS_MAC ? '⌘' : 'Ctrl'} + scroll to zoom
         </div>
       ) : null}
       {children}

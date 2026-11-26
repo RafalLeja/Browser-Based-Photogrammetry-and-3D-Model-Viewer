@@ -129,3 +129,51 @@ def test_job_list_filters_by_state(curator: TestClient, worker: Worker) -> None:
     assert len(curator.get("/api/v1/jobs?status=active").json()) == 1
     assert len(curator.get("/api/v1/jobs?status=done").json()) == 1
     assert len(curator.get("/api/v1/jobs").json()) == 2
+
+
+def _context(curator: TestClient, settings):  # noqa: ANN001, ANN202
+    from app.worker.runner import JobContext
+
+    body = upload(curator)
+    sessions = curator.app.state.sessionmaker
+    with sessions() as db:
+        return JobContext(sessions, settings, db.get(Job, body["job"]["id"])), body["job"]["id"]
+
+
+def test_child_output_is_saved_in_batches(curator: TestClient, settings) -> None:  # noqa: ANN001
+    import sys
+
+    from app.worker.runner import run_process
+
+    ctx, job_id = _context(curator, settings)
+    writes: list[str] = []
+    save = ctx.log
+    ctx.log = lambda text: (writes.append(text), save(text))  # type: ignore[method-assign]
+    output = run_process(ctx, [sys.executable, "-c", "for i in range(2000): print(i)"])
+    assert len(output) == 2000
+    assert len(writes) <= 3  # Not one database write per line.
+    assert curator.get(f"/api/v1/jobs/{job_id}").json()["log"].rstrip().endswith("1999")
+
+
+def test_a_chatty_child_process_is_stopped_when_the_job_is_cancelled(curator: TestClient, settings) -> None:  # noqa: ANN001
+    import sys
+    import threading
+    import time
+
+    import pytest
+
+    from app.worker.runner import JobCancelled, run_process
+
+    ctx, job_id = _context(curator, settings)
+
+    def cancel_soon() -> None:
+        time.sleep(0.5)
+        with curator.app.state.sessionmaker() as db:
+            db.get(Job, job_id).cancel_requested = True
+            db.commit()
+
+    threading.Thread(target=cancel_soon, daemon=True).start()
+    started = time.monotonic()
+    with pytest.raises(JobCancelled):
+        run_process(ctx, [sys.executable, "-c", "while True: print('x' * 80, flush=True)"])
+    assert time.monotonic() - started < 10  # The old check waited for a quiet second that never came.

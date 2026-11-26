@@ -73,7 +73,7 @@ export function Home() {
           <div className="showcase" aria-label="Featured 3D model">
             {object ? (
               <>
-                <ModelStage url={object.model_url} format={object.model_format} up={object.up} label={`3D view of ${object.title}`} autoRotate />
+                <ModelStage url={object.model_url} format={object.model_format} up={object.up} label={`3D view of ${object.title}`} autoRotate cooperative />
                 <div className="showcase-caption">
                   <strong>{object.title}</strong>
                   <span>Reconstructed with our pipeline · drag to turn</span>

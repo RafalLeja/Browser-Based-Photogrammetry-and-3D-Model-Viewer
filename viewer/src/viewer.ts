@@ -256,7 +256,12 @@ class ViewerImpl implements Viewer {
     this.resizeObserver = new ResizeObserver(resize);
     this.resizeObserver.observe(container);
 
-    this.removeListeners = this.listenForClicks(canvas);
+    const stopClicks = this.listenForClicks(canvas);
+    const stopSharing = options?.cooperativeGestures ? this.shareGesturesWithPage(container, canvas) : () => {};
+    this.removeListeners = () => {
+      stopClicks();
+      stopSharing();
+    };
 
     // The timer measures the time between frames, so auto-rotate turns at the same speed on a
     // 60 Hz and a 120 Hz display. connect() makes it ignore time spent in a background tab.
@@ -699,6 +704,27 @@ class ViewerImpl implements Viewer {
       canvas.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('pointermove', onMove);
       window.removeEventListener('keydown', onKey);
+    };
+  }
+
+  /** See ViewerOptions.cooperativeGestures. */
+  private shareGesturesWithPage(container: HTMLElement, canvas: HTMLCanvasElement): () => void {
+    // The browser scrolls the page on a vertical swipe and hands sideways swipes to the controls.
+    canvas.style.touchAction = 'pan-y';
+    this.controls.enableZoom = false;
+    // Capture phase on the container: runs before OrbitControls' own listeners on the canvas.
+    // With zoom off, OrbitControls leaves the wheel event alone, so the page scrolls.
+    const onWheel = (event: WheelEvent) => {
+      this.controls.enableZoom = event.ctrlKey || event.metaKey;
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') this.controls.enableZoom = true; // Pinch to zoom.
+    };
+    container.addEventListener('wheel', onWheel, { capture: true, passive: true });
+    container.addEventListener('pointerdown', onPointerDown, { capture: true });
+    return () => {
+      container.removeEventListener('wheel', onWheel, { capture: true });
+      container.removeEventListener('pointerdown', onPointerDown, { capture: true });
     };
   }
 
