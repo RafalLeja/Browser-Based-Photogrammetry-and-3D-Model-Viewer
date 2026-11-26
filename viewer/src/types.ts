@@ -74,11 +74,47 @@ export interface ScreenshotOptions {
   quality?: number;
   /** Longest side of the image in pixels. Default: the canvas size. */
   maxSize?: number;
+  /**
+   * 'view' (default) keeps the whole canvas. 'subject' crops to the model, padded and widened to
+   * `aspect`, so it fills the picture: what a cover image or a catalogue photo needs.
+   */
+  fit?: 'view' | 'subject';
+  /** Width divided by height of a 'subject' crop. Default 4 / 3. */
+  aspect?: number;
+  /** CSS colour behind the model. Default none: transparent where the format allows, black in JPEG. */
+  background?: string;
 }
+
+export interface ExportOptions {
+  /** Multiplies every coordinate: 1000 turns metres into the millimetres 3D printers expect. Default 1. */
+  scale?: number;
+}
+
+/** What a loaded model is made of. */
+export interface ModelStats {
+  meshes: number;
+  /** Point clouds (a PLY without faces). */
+  points: number;
+  vertices: number;
+  materials: number;
+  textures: number;
+  /** Longest side of the largest texture, in pixels; 0 without textures. */
+  maxTextureSize: number;
+  /** Whether colour is stored per vertex, as photogrammetry meshes usually do. */
+  vertexColors: boolean;
+}
+
+/**
+ * How surfaces are drawn: 'standard' with their own materials, 'clay' as matte grey to read the
+ * shape without colour, 'wireframe' as clay with the triangle edges, 'normals' coloured by
+ * surface direction. Point clouds always keep their colours.
+ */
+export type RenderMode = 'standard' | 'clay' | 'wireframe' | 'normals';
 
 export interface ModelInfo {
   url: string;
   triangles: number;
+  stats: ModelStats;
   /** Bounding-sphere radius in world units; useful to scale UI hints. */
   radius: number;
   /** Bounding-box size in model units. True metres once the pipeline outputs real scale (W05). */
@@ -153,6 +189,8 @@ export interface Pin {
   normal: Vec3;
   title: string;
   text?: string;
+  /** A category for styling: the overlay copies it to the pin's data-kind attribute. */
+  kind?: string;
 }
 
 /**
@@ -180,6 +218,8 @@ export interface ViewerEvents {
   'pin-place': { position: Vec3; normal: Vec3 };
   /** The user finished moving the camera, or a camera flight ended. */
   'view-change': ViewState;
+  /** The camera moved, on every frame it moves (drags, flights, damping): for linking two views. */
+  'camera-move': ViewState;
 }
 
 export type Unsubscribe = () => void;
@@ -220,8 +260,20 @@ export interface Viewer {
   removePin(id: string): void;
   /** Highlight one pin (or none). */
   setActivePin(id: string | null): void;
-  /** Fly the camera to a pin and highlight it. */
-  focusPin(id: string): void;
+  /** Fly the camera to a pin (animated unless `animate` is false) and highlight it. */
+  focusPin(id: string, options?: { animate?: boolean }): void;
+  /** Look at the whole model from `direction` (from its centre towards the camera; any length). */
+  viewFrom(direction: Vec3, options?: { animate?: boolean }): void;
+  /** Draw surfaces with their own materials, as clay, as wireframe or by surface direction. */
+  setRenderMode(mode: RenderMode): void;
+  readonly renderMode: RenderMode;
+  /** Show the bounding box with its width, depth and height labelled. */
+  setDimensions(show: boolean): void;
+  /**
+   * The current model as a file: binary STL for 3D printing, or OBJ (with vertex colours). Turned
+   * to Z up, as both formats expect. Rejects for a point cloud, which has no surface.
+   */
+  exportModel(format: 'stl' | 'obj', options?: ExportOptions): Promise<Blob>;
   /** Cut the model open with a plane, to look inside. */
   setSection(options: SectionOptions): void;
   /** The current view as an image, without pins and labels. */

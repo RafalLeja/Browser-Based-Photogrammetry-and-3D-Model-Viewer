@@ -1,7 +1,7 @@
 // Helpers for the objects inside a loaded model: free their memory, count their triangles,
 // and prepare them before the first render. Kept apart from viewer.ts so Node can test them.
 import * as THREE from 'three/webgpu';
-import type { Vec3 } from './types';
+import type { ModelStats, Vec3 } from './types';
 
 /** Anything three draws from a geometry and a material: meshes, points and lines. */
 type Drawable = THREE.Object3D & {
@@ -128,4 +128,30 @@ export function measureModel(root: THREE.Object3D): { box: THREE.Box3; triangles
   const finite = [...size.toArray(), ...center.toArray()].every(Number.isFinite);
   if (!finite) throw new Error('its vertex positions are not finite numbers (NaN or Infinity)');
   return { box, triangles: countTriangles(root) };
+}
+
+/** What a model is made of, for the inspector: counts, texture sizes and whether it has colours. */
+export function modelStats(root: THREE.Object3D): ModelStats {
+  const materials = new Set<THREE.Material>();
+  const textures = new Set<THREE.Texture>();
+  const stats: ModelStats = { meshes: 0, points: 0, vertices: 0, materials: 0, textures: 0, maxTextureSize: 0, vertexColors: false };
+  root.traverse((object) => {
+    if (!isDrawable(object) || object.userData.helper) return;
+    if (isMesh(object)) stats.meshes++;
+    else if ((object as THREE.Points).isPoints) stats.points++;
+    const position = object.geometry.attributes.position as THREE.BufferAttribute | undefined;
+    stats.vertices += position?.count ?? 0;
+    if (object.geometry.hasAttribute('color')) stats.vertexColors = true;
+    for (const material of materialsOf(object)) {
+      materials.add(material);
+      for (const texture of texturesOf(material)) textures.add(texture);
+    }
+  });
+  stats.materials = materials.size;
+  stats.textures = textures.size;
+  for (const texture of textures) {
+    const image = texture.image as { width?: number; height?: number } | null;
+    stats.maxTextureSize = Math.max(stats.maxTextureSize, image?.width ?? 0, image?.height ?? 0);
+  }
+  return stats;
 }

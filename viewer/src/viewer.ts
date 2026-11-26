@@ -15,18 +15,20 @@ import { disposeScene, outdoorScene, studioScene } from './environments';
 import { Emitter } from './events';
 import { fitDistance } from './framing';
 import { abortError, httpStatusOf, isAbortError, modelFormat, progressPayload } from './loading';
-import { distance, easeInOutCubic, formatLength, isViewState, lerpVec3, sectionPlane } from './measure';
-import { disposeModel, measureModel, orientUp, plyObject, prepareModel } from './model';
+import { dimensionEdges, distance, easeInOutCubic, formatLength, isViewState, lerpVec3, sectionPlane, subjectCrop } from './measure';
+import { disposeModel, measureModel, modelStats, orientUp, plyObject, prepareModel } from './model';
 import { Overlay, type MeasureView, type PinView, type ScreenPoint } from './overlay';
 import { ContactShadow } from './shadow';
 import type {
   EnvironmentOptions,
+  ExportOptions,
   EnvironmentPreset,
   LightingUpdate,
   LoadOptions,
   Measurement,
   ModelInfo,
   Pin,
+  RenderMode,
   RendererBackend,
   ScreenshotOptions,
   SectionOptions,
@@ -155,6 +157,12 @@ class ViewerImpl implements Viewer {
   private needsRender = true;
   private lastOcclusion = 0;
   private occlusionStale = false;
+  private mode: RenderMode = 'standard';
+  /** Each mesh's own material while another render mode replaces it. */
+  private readonly ownMaterials = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
+  private modeMaterials: { clay: THREE.Material; normals: THREE.Material; wire: THREE.Material } | null = null;
+  private showDimensions = false;
+  private readonly boxHelper = new THREE.Box3Helper(new THREE.Box3(), 0xffffff);
 
   constructor(container: HTMLElement, renderer: THREE.WebGPURenderer, options?: ViewerOptions) {
     this.renderer = renderer;
@@ -201,6 +209,9 @@ class ViewerImpl implements Viewer {
     this.modelRoot.enabled = false;
     this.modelRoot.clippingPlanes = [this.sectionPlane];
     this.scene.add(this.modelRoot, this.shadow.mesh);
+    this.boxHelper.visible = false;
+    Object.assign(this.boxHelper.material, { transparent: true, opacity: 0.5 });
+    this.scene.add(this.boxHelper);
 
     // A light's direction runs from its position to its target, so the target must be
     // in the scene as well for its transform to update.
@@ -224,6 +235,7 @@ class ViewerImpl implements Viewer {
     });
     this.controls.addEventListener('change', () => {
       this.needsRender = true;
+      this.emitter.emit('camera-move', this.getView());
     });
     this.controls.addEventListener('end', () => this.emitter.emit('view-change', this.getView()));
 
@@ -326,10 +338,13 @@ class ViewerImpl implements Viewer {
       throw this.fail('load', `Failed to load model "${url}"`, cause);
     }
     const { box, triangles } = measured;
+    const stats = modelStats(model);
 
     prepareModel(model, this.anisotropy);
 
     // The old model is removed only now, so a failed load keeps the current model on screen.
+    // Its own materials go back first, so only they are freed, not the shared render-mode ones.
+    this.applyRenderMode('standard');
     disposeModel(this.modelRoot);
     this.modelRoot.clear();
     this.clearTools();
@@ -341,7 +356,9 @@ class ViewerImpl implements Viewer {
     model.updateWorldMatrix(true, true);
     this.model = model;
     this.modelBox = box.clone();
+    this.boxHelper.box.copy(box);
     this.trueScale = options?.trueScale ?? true;
+    this.applyRenderMode(this.mode);
 
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
@@ -361,6 +378,7 @@ class ViewerImpl implements Viewer {
     const info: ModelInfo = {
       url,
       triangles,
+      stats,
       radius,
       size: toVec3(size),
       center: toVec3(center),
@@ -371,11 +389,63 @@ class ViewerImpl implements Viewer {
 
   resetView(): void {
     if (!this.modelSphere) return;
+    this.viewFrom(toVec3(DEFAULT_VIEW_DIRECTION));
+    this.userMovedCamera = false;
+  }
+
+  viewFrom(direction: Vec3, options?: { animate?: boolean }): void {
+    const unit = new THREE.Vector3(...direction).normalize();
+    if (!this.modelSphere || !(unit.lengthSq() > 0)) return;
     const { center, radius } = this.modelSphere;
     const distanceToFit = fitDistance(radius, THREE.MathUtils.degToRad(this.camera.fov), this.camera.aspect);
-    const position = center.clone().addScaledVector(DEFAULT_VIEW_DIRECTION, distanceToFit);
-    this.setView({ position: toVec3(position), target: toVec3(center) });
-    this.userMovedCamera = false;
+    this.setView({ position: toVec3(center.clone().addScaledVector(unit, distanceToFit)), target: toVec3(center) }, options);
+  }
+
+  get renderMode(): RenderMode {
+    return this.mode;
+  }
+
+  setRenderMode(mode: RenderMode): void {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.applyRenderMode(mode);
+    this.needsRender = true;
+  }
+
+  setDimensions(show: boolean): void {
+    this.showDimensions = show;
+    this.boxHelper.visible = show;
+    this.needsRender = true;
+  }
+
+  async exportModel(format: 'stl' | 'obj', options?: ExportOptions): Promise<Blob> {
+    const model = this.model;
+    let meshes = 0;
+    model?.traverse((object) => {
+      if ((object as THREE.Mesh).isMesh && !object.userData.helper) meshes++;
+    });
+    if (!model || meshes === 0) throw new Error('[viewer] Only a model with surfaces can be exported; a point cloud has none.');
+    // A shallow clone shares the geometry, so this costs no copy of the vertices. Both exporters
+    // write geometry only, so the render mode does not matter, but its wireframe helpers must go.
+    // The clone is turned so +Y up (three) becomes +Z up (the STL and OBJ convention).
+    const copy = model.clone();
+    const helpers: THREE.Object3D[] = [];
+    copy.traverse((object) => {
+      if (object.userData.helper) helpers.push(object);
+    });
+    for (const helper of helpers) helper.removeFromParent();
+    const root = new THREE.Group();
+    root.rotation.x = Math.PI / 2;
+    root.scale.setScalar(options?.scale ?? 1);
+    root.add(copy);
+    root.updateMatrixWorld(true);
+    if (format === 'stl') {
+      const { STLExporter } = await import('three/addons/exporters/STLExporter.js');
+      const data = new STLExporter().parse(root, { binary: true }) as DataView;
+      return new Blob([data.buffer as ArrayBuffer], { type: 'model/stl' });
+    }
+    const { OBJExporter } = await import('three/addons/exporters/OBJExporter.js');
+    return new Blob([new OBJExporter().parse(root)], { type: 'model/obj' });
   }
 
   setAutoRotate(on: boolean): void {
@@ -528,7 +598,7 @@ class ViewerImpl implements Viewer {
     this.overlay.setActivePin(id);
   }
 
-  focusPin(id: string): void {
+  focusPin(id: string, options?: { animate?: boolean }): void {
     const pin = this.pins.get(id);
     if (!pin || !this.model || !this.modelSphere) return;
     const point = this.toWorld(pin.position);
@@ -537,7 +607,7 @@ class ViewerImpl implements Viewer {
     // Mostly in front of the surface, keeping a little of the current angle so the move feels natural.
     const direction = normal.multiplyScalar(0.75).add(current.multiplyScalar(0.25)).normalize();
     const close = Math.max(this.modelSphere.radius * 1.1, this.controls.minDistance * 1.2);
-    this.setView({ position: toVec3(point.clone().addScaledVector(direction, close)), target: toVec3(point) });
+    this.setView({ position: toVec3(point.clone().addScaledVector(direction, close)), target: toVec3(point) }, options);
     this.setActivePin(id);
   }
 
@@ -563,11 +633,22 @@ class ViewerImpl implements Viewer {
     const canvas = this.renderer.domElement;
     // Render and copy in the same task: the drawing buffer is only guaranteed until it is shown.
     this.renderer.render(this.scene, this.camera);
-    const scale = options?.maxSize ? Math.min(1, options.maxSize / Math.max(canvas.width, canvas.height)) : 1;
+    const crop = (options?.fit === 'subject' && this.subjectRect(options.aspect ?? 4 / 3)) || {
+      x: 0,
+      y: 0,
+      width: canvas.width,
+      height: canvas.height,
+    };
+    const scale = options?.maxSize ? Math.min(1, options.maxSize / Math.max(crop.width, crop.height)) : 1;
     const copy = document.createElement('canvas');
-    copy.width = Math.round(canvas.width * scale);
-    copy.height = Math.round(canvas.height * scale);
-    copy.getContext('2d')?.drawImage(canvas, 0, 0, copy.width, copy.height);
+    copy.width = Math.max(1, Math.round(crop.width * scale));
+    copy.height = Math.max(1, Math.round(crop.height * scale));
+    const context = copy.getContext('2d');
+    if (context && options?.background) {
+      context.fillStyle = options.background;
+      context.fillRect(0, 0, copy.width, copy.height);
+    }
+    context?.drawImage(canvas, crop.x, crop.y, crop.width, crop.height, 0, 0, copy.width, copy.height);
     return new Promise((resolve, reject) => {
       copy.toBlob(
         (blob) => (blob ? resolve(blob) : reject(new Error('[viewer] The browser could not encode the screenshot'))),
@@ -600,9 +681,13 @@ class ViewerImpl implements Viewer {
     this.resizeObserver.disconnect();
     this.controls.dispose();
 
+    this.applyRenderMode('standard');
     disposeModel(this.modelRoot);
     this.modelRoot.clear();
     this.model = null;
+    for (const material of Object.values(this.modeMaterials ?? {})) material.dispose();
+    this.boxHelper.geometry.dispose();
+    (this.boxHelper.material as THREE.Material).dispose();
     this.shadow.dispose();
     this.replaceEnvironment(null, null);
     this.pmrem.dispose();
@@ -819,6 +904,18 @@ class ViewerImpl implements Viewer {
       b: this.project(this.toWorld(m.end)),
       label: formatLength(m.distance, this.trueScale),
     }));
+    if (this.showDimensions && this.model) {
+      const edges = dimensionEdges(toVec3(this.modelBox.min), toVec3(this.modelBox.max), toVec3(this.camera.position));
+      for (const [id, [start, end]] of Object.entries(edges)) {
+        measures.push({
+          id: `dimension-${id}`,
+          a: this.project(new THREE.Vector3(...start)),
+          b: this.project(new THREE.Vector3(...end)),
+          label: formatLength(distance(start, end), this.trueScale),
+          kind: 'dimension',
+        });
+      }
+    }
     if (this.pendingStart) {
       const a = this.project(this.toWorld(this.pendingStart));
       const end = this.hoverPoint ?? this.pendingStart;
@@ -860,6 +957,52 @@ class ViewerImpl implements Viewer {
   private toModelDirection(world: THREE.Vector3): Vec3 {
     const inverse = this.model ? this.model.matrixWorld.clone().invert() : new THREE.Matrix4();
     return toVec3(world.clone().transformDirection(inverse));
+  }
+
+  /** Puts the model's own materials back, then swaps in the materials of `mode`. */
+  private applyRenderMode(mode: RenderMode): void {
+    for (const [mesh, material] of this.ownMaterials) {
+      mesh.material = material;
+      for (const child of [...mesh.children]) if (child.userData.helper) mesh.remove(child);
+    }
+    this.ownMaterials.clear();
+    if (mode === 'standard' || !this.model) return;
+    this.modeMaterials ??= {
+      // Matte and colourless, so only the shape speaks. Pushed back a little, so wireframe lines drawn
+      // at the same depth win.
+      clay: new THREE.MeshStandardMaterial({ color: '#b9b3aa', roughness: 0.9, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }),
+      normals: new THREE.MeshNormalMaterial({ side: THREE.DoubleSide }),
+      wire: new THREE.MeshBasicMaterial({ color: '#1d1d1f', wireframe: true, transparent: true, opacity: 0.22, depthWrite: false }),
+    };
+    const materials = this.modeMaterials;
+    this.model.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh || mesh.userData.helper) return;
+      this.ownMaterials.set(mesh, mesh.material);
+      mesh.material = mode === 'normals' ? materials.normals : materials.clay;
+      if (mode === 'wireframe') {
+        const wire = new THREE.Mesh(mesh.geometry, materials.wire);
+        wire.userData.helper = true; // Not part of the model: skipped by picking, statistics and export.
+        wire.raycast = () => {};
+        mesh.add(wire);
+      }
+    });
+  }
+
+  /** The canvas pixels the model covers, padded and widened to `aspect`; null if it is off screen. */
+  private subjectRect(aspect: number): { x: number; y: number; width: number; height: number } | null {
+    if (!this.model) return null;
+    const { min, max } = this.modelBox;
+    const canvas = this.renderer.domElement;
+    const points: { x: number; y: number }[] = [];
+    for (const x of [min.x, max.x])
+      for (const y of [min.y, max.y])
+        for (const z of [min.z, max.z]) {
+          const ndc = new THREE.Vector3(x, y, z).project(this.camera);
+          if (ndc.z < -1 || ndc.z > 1) return null; // A corner behind the camera: keep the whole view.
+          points.push({ x: ((ndc.x + 1) / 2) * canvas.width, y: ((1 - ndc.y) / 2) * canvas.height });
+        }
+    return subjectCrop(points, canvas.width, canvas.height, aspect);
   }
 
   private clearTools(): void {

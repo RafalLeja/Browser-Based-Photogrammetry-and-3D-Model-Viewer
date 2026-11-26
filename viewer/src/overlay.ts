@@ -23,6 +23,8 @@ export interface MeasureView {
   b: ScreenPoint;
   label: string;
   pending?: boolean;
+  /** 'dimension' for the bounding-box edges, drawn lighter than a measurement. */
+  kind?: 'dimension';
 }
 
 const STYLE_ID = 'vw-default-styles';
@@ -39,6 +41,9 @@ const DEFAULT_CSS = `
 :where(.vw-pin:hover),:where(.vw-pin[data-active]){transform:scale(1.15);background:#0071e3}
 :where(.vw-pin[data-occluded]){opacity:.35}
 :where(.vw-pin:focus-visible){outline:3px solid #0071e3;outline-offset:2px}
+:where(.vw-measure[data-kind=dimension]){stroke-width:1.5;stroke-dasharray:2 4;opacity:.85}
+:where(.vw-dot[data-kind=dimension]){width:6px;height:6px;margin:-3px 0 0 -3px}
+:where(.vw-measure-label[data-kind=dimension]){transform:translate(-50%,-50%);background:rgba(255,255,255,.9);color:#1d1d1f}
 `;
 
 function ensureStyles(): void {
@@ -85,7 +90,7 @@ export class Overlay {
   }
 
   /** Creates or removes pin buttons so they match `pins`, numbered in list order. */
-  syncPins(pins: { id: string; title: string }[]): void {
+  syncPins(pins: { id: string; title: string; kind?: string }[]): void {
     const wanted = new Set(pins.map((p) => p.id));
     for (const [id, element] of this.pins) {
       if (!wanted.has(id)) {
@@ -106,6 +111,8 @@ export class Overlay {
       element.textContent = String(index + 1);
       element.setAttribute('aria-label', `Annotation ${index + 1}: ${pin.title}`);
       element.title = pin.title;
+      if (pin.kind) element.dataset.kind = pin.kind;
+      else delete element.dataset.kind;
       element.toggleAttribute('data-active', pin.id === this.activePin);
     });
   }
@@ -142,6 +149,10 @@ export class Overlay {
       elements.line.setAttribute('y2', String(measure.b.y));
       elements.line.style.display = visible ? '' : 'none';
       elements.line.toggleAttribute('data-pending', measure.pending === true);
+      for (const element of [elements.line, elements.a, elements.b, elements.label]) {
+        if (measure.kind) element.setAttribute('data-kind', measure.kind);
+        else element.removeAttribute('data-kind');
+      }
       place(elements.a, measure.a);
       place(elements.b, measure.b);
       if (elements.label.textContent !== measure.label) elements.label.textContent = measure.label;

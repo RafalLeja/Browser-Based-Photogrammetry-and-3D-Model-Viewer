@@ -63,3 +63,64 @@ export function sectionPlane(
   // three keeps points where normal · p + constant >= 0, so the kept side is behind the normal.
   return { normal, constant: -sign * at };
 }
+
+/**
+ * Three edges of a model's bounding box that show its width, depth and height, all starting at
+ * the bottom corner nearest the camera, so the labels stay in front of the model.
+ */
+export function dimensionEdges(min: Vec3, max: Vec3, camera: Vec3): { width: [Vec3, Vec3]; depth: [Vec3, Vec3]; height: [Vec3, Vec3] } {
+  const near = (axis: 0 | 2): [number, number] =>
+    Math.abs(camera[axis] - min[axis]) <= Math.abs(camera[axis] - max[axis]) ? [min[axis], max[axis]] : [max[axis], min[axis]];
+  const [x0, x1] = near(0);
+  const [z0, z1] = near(2);
+  const corner: Vec3 = [x0, min[1], z0];
+  return {
+    width: [corner, [x1, min[1], z0]],
+    depth: [corner, [x0, min[1], z1]],
+    height: [corner, [x0, max[1], z0]],
+  };
+}
+
+/**
+ * The part of an image to keep so a subject fills it: the box around the subject's projected
+ * points, padded by `padding` (a fraction of its size), widened to `aspect`, kept inside the image.
+ * Null when there are no points.
+ */
+export function subjectCrop(
+  points: { x: number; y: number }[],
+  width: number,
+  height: number,
+  aspect: number,
+  padding = 0.08,
+): { x: number; y: number; width: number; height: number } | null {
+  if (points.length === 0 || !(aspect > 0)) return null;
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const pad = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * padding;
+  const left = Math.min(...xs) - pad;
+  const right = Math.max(...xs) + pad;
+  const top = Math.min(...ys) - pad;
+  const bottom = Math.max(...ys) + pad;
+  let w = right - left;
+  let h = bottom - top;
+  if (w / h < aspect) w = h * aspect;
+  else h = w / aspect;
+  // Never larger than the image, keeping the aspect.
+  const fit = Math.min(1, width / w, height / h);
+  w *= fit;
+  h *= fit;
+  const x = Math.min(Math.max((left + right) / 2 - w / 2, 0), width - w);
+  const y = Math.min(Math.max((top + bottom) / 2 - h / 2, 0), height - h);
+  return { x, y, width: w, height: h };
+}
+
+/**
+ * The same view of another model: the same viewing direction, and the same distance and target
+ * offset relative to its size, so two different scans can be compared side by side.
+ */
+export function mirrorView(view: ViewState, from: { center: Vec3; radius: number }, to: { center: Vec3; radius: number }): ViewState {
+  const k = from.radius > 0 ? to.radius / from.radius : 1;
+  const target = [0, 1, 2].map((i) => to.center[i] + (view.target[i] - from.center[i]) * k) as Vec3;
+  const position = [0, 1, 2].map((i) => target[i] + (view.position[i] - view.target[i]) * k) as Vec3;
+  return { position, target };
+}
