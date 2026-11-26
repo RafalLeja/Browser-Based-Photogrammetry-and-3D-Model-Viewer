@@ -19,6 +19,7 @@ const MODELS: Record<string, { url: string; options?: LoadOptions }> = {
     url: `${BASE}models/eagle-dense.ply`,
     options: { up: [0.2014, -0.6971, -0.6881] },
   },
+  eagle: { url: `${BASE}models/eagle.glb` },
   // On purpose: shows what a failed download looks like.
   'missing file (error test)': { url: `${BASE}models/does-not-exist.glb` },
 };
@@ -137,7 +138,7 @@ export function ViewerPage() {
       });
 
       const params = {
-        model: 'DamagedHelmet',
+        model: 'eagle',
         environment: 'Studio HDR',
         showBackground: false,
         intensity: 1,
