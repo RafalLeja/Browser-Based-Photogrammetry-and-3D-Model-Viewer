@@ -5,6 +5,7 @@ from enum import Enum
 from pathlib import Path
 
 import pycolmap
+import trimesh
 
 from .storage import get_output_directory
 
@@ -20,8 +21,9 @@ class PhotogrammetryStep(Enum):
     PATCH_MATCHING = 8
     STEREO_FUSION = 9
     POISSON_MESHING = 10
-    EXPORT_DENSE_MODEL = 11
-    FINISHED = 12
+    CONVERT_TO_GLB = 11
+    EXPORT_DENSE_MODEL = 12
+    FINISHED = 13
 
 
 class PhotogrammetryModel:
@@ -40,7 +42,7 @@ class PhotogrammetryModel:
         self.output_file = output_file
         self.sparse_dir = self.output_dir / "sparse"
         self.dense_dir = self.output_dir / "dense"
-        self.meshed_path: Path = self.dense_dir / "meshed-poisson.ply"
+        self.meshed_glb_path: Path = self.dense_dir / "meshed-poisson.glb"
         self.times = {}
 
         self.steps = {
@@ -53,6 +55,7 @@ class PhotogrammetryModel:
             PhotogrammetryStep.PATCH_MATCHING: self.patch_match,
             PhotogrammetryStep.STEREO_FUSION: self.stereo_fusion,
             PhotogrammetryStep.POISSON_MESHING: self.poisson_meshing,
+            PhotogrammetryStep.CONVERT_TO_GLB: self.convert_to_glb,
             PhotogrammetryStep.EXPORT_DENSE_MODEL: self.export_model,
         }
         if restart:
@@ -177,7 +180,11 @@ class PhotogrammetryModel:
             options=options,
         )
 
-        self.meshed_path = self.dense_dir / "meshed-poisson.ply"
+        self.meshed_ply_path = self.dense_dir / "meshed-poisson.ply"
+
+    def convert_to_glb(self):
+        trimesh_mesh = trimesh.load_mesh(self.meshed_ply_path)
+        trimesh_mesh.export(self.meshed_glb_path, file_type="glb")
 
     def export_sparse_model(self):
         if self.output_file is None:
@@ -195,10 +202,10 @@ class PhotogrammetryModel:
         if self.output_file is None:
             return
 
-        if self.meshed_path.exists():
+        if self.meshed_glb_path.exists():
             print(f"Exporting dense model to {self.output_file}")
             self.output_file.parent.mkdir(parents=True, exist_ok=True)
-            self.meshed_path.copy(self.output_file)
+            self.meshed_glb_path.copy(self.output_file)
             return
 
         raise RuntimeError("No dense reconstruction available; run pipeline first.")
