@@ -3,16 +3,24 @@
 import { useEffect, useRef } from 'react';
 import GUI from 'lil-gui';
 import { createViewer } from '../index';
-import type { EnvironmentOptions, ToneMappingName, Viewer } from '../index';
+import type { EnvironmentOptions, LoadOptions, ToneMappingName, Vec3, Viewer } from '../index';
 
 const BASE = import.meta.env.BASE_URL;
 const STUDIO_HDR = `${BASE}hdr/studio_small_09_1k.hdr`;
 
-const MODELS: Record<string, string> = {
-  DamagedHelmet: `${BASE}models/DamagedHelmet.glb`,
-  'eagle (raw scan)': `${BASE}models/eagle.glb`,
+/** COLMAP keeps the first photo's camera frame, where +Y points down. */
+const COLMAP_UP: Vec3 = [0, -1, 0];
+
+const MODELS: Record<string, { url: string; options?: LoadOptions }> = {
+  DamagedHelmet: { url: `${BASE}models/DamagedHelmet.glb` },
+  // Rafał's pipeline output: a COLMAP Poisson mesh with vertex colours. `up` is the normal of
+  // the ground it stands on, measured with PCA, until the pipeline outputs +Y up (W05).
+  'eagle (pipeline PLY)': {
+    url: `${BASE}models/eagle-dense.ply`,
+    options: { up: [0.2014, -0.6971, -0.6881] },
+  },
   // On purpose: shows what a failed download looks like.
-  'missing file (error test)': `${BASE}models/does-not-exist.glb`,
+  'missing file (error test)': { url: `${BASE}models/does-not-exist.glb` },
 };
 
 const ENVIRONMENTS: Record<string, EnvironmentOptions> = {
@@ -47,7 +55,7 @@ export function ViewerPage() {
         `Load: ${statusObj.load}`,
         `Triangles: ${statusObj.triangles}`,
         `Size: ${statusObj.size}`,
-        'Tip: drop a .glb file on the page',
+        'Tip: drop a .glb or .ply file on the page',
       ].map((text) => {
         const row = document.createElement('div');
         row.textContent = text;
@@ -85,8 +93,11 @@ export function ViewerPage() {
       // The object URL points at the file in memory. A .glb carries its textures inside, so
       // nothing needs the URL once the load has settled.
       const url = URL.createObjectURL(file);
+      // A blob: URL has no extension, so the file name tells the viewer the format.
+      // A .ply comes from our COLMAP pipeline, so it is flipped the right way up.
+      const options: LoadOptions = /\.ply$/i.test(file.name) ? { format: 'ply', up: COLMAP_UP } : {};
       activeViewer
-        .load(url)
+        .load(url, options)
         .catch(ignoreRejection)
         .finally(() => URL.revokeObjectURL(url));
     }
@@ -133,6 +144,7 @@ export function ViewerPage() {
         toneMapping: 'neutral' as ToneMappingName,
         exposure: 1,
         keyLight: 1,
+        keyLightColor: '#ffffff',
         groundShadow: 0.5,
         autoRotate: false,
         resetView: () => viewer.resetView(),
@@ -149,7 +161,7 @@ export function ViewerPage() {
       gui.add(params, 'model', Object.keys(MODELS)).name('Model').onChange((name: string) => {
         statusObj.model = name;
         renderStatus();
-        viewer.load(MODELS[name]).catch(ignoreRejection);
+        viewer.load(MODELS[name].url, MODELS[name].options).catch(ignoreRejection);
       });
       gui.add(params, 'environment', Object.keys(ENVIRONMENTS)).name('Environment').onChange((name: string) => {
         params.showBackground = true;
@@ -170,6 +182,7 @@ export function ViewerPage() {
       gui.add(params, 'toneMapping', TONE_MAPPINGS).name('Tone mapping').onChange((toneMapping: ToneMappingName) => viewer.setLighting({ toneMapping }));
       gui.add(params, 'exposure', 0, 3, 0.01).name('Exposure').onChange((exposure: number) => viewer.setLighting({ exposure }));
       gui.add(params, 'keyLight', 0, 5, 0.01).name('Key light intensity').onChange((intensity: number) => viewer.setLighting({ keyLight: { intensity } }));
+      gui.addColor(params, 'keyLightColor').name('Key light colour').onChange((color: string) => viewer.setLighting({ keyLight: { color } }));
       gui.add(params, 'groundShadow', 0, 1, 0.01).name('Ground shadow').onChange((opacity: number) => viewer.setLighting({ groundShadow: { opacity } }));
       gui.add(params, 'autoRotate').name('Auto-rotate').onChange((on: boolean) => viewer.setAutoRotate(on));
       gui.add(params, 'resetView').name('Reset view');
@@ -179,7 +192,7 @@ export function ViewerPage() {
       // A failure here is shown by the "error" listener; a cancelled load is not a failure.
       statusObj.model = params.model;
       renderStatus();
-      await viewer.load(MODELS[params.model]).catch(ignoreRejection);
+      await viewer.load(MODELS[params.model].url, MODELS[params.model].options).catch(ignoreRejection);
     }
 
     init().catch((err: unknown) => {
